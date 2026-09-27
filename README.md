@@ -1,11 +1,30 @@
 # Neural Grand Prix
 
 Veintidós pilotos con IA que aprenden a correr. Fin de semana completo: libres → Q1/Q2/Q3 → carrera,
-con paradas y estrategia de neumáticos. Tres circuitos (se elige en la pantalla de inicio):
+con paradas, estrategia de neumáticos, lluvia, radio y realización de TV. Hecho con three.js, sin build.
+
+![Salida en Monte Alto al atardecer](docs/img/salida-atardecer.gif)
+
+| | |
+|---|---|
+| ![Monte Alto al atardecer](docs/img/atardecer-limpia.jpg) | ![Al Noor de noche](docs/img/noche-limpia.jpg) |
+| ![Monte Alto desde el dron](docs/img/atardecer-heli-limpia.jpg) | ![Al Noor desde el dron](docs/img/noche-heli-limpia.jpg) |
+| ![Cámara exterior con HUD](docs/img/atardecer-exterior.jpg) | ![T-Cam de noche](docs/img/noche-tcam.jpg) |
+
+![Salida en Al Noor de noche](docs/img/salida-noche.gif)
+
+**Panel de aprendizaje** (tecla L): quién mejora más, evolución de tiempos, trazada frente a la ideal y agarre que se atreve a usar en cada curva.
+
+![Panel de aprendizaje](docs/img/aprendizaje.jpg)
+
+## Circuitos
+
+Se elige en la pantalla de inicio:
 
 - **Neural Park**: permanente, de día, 5,2 km, escapatorias de grava y hierba.
 - **Porto Cidade**: urbano, 5,4 km de calles en ángulo recto, muros a 2 m, puerto con yates.
 - **Al Noor**: desierto de noche con torres de focos, 6 km, hotel iluminado.
+- **Monte Alto**: montaña al atardecer, con desniveles fuertes.
 
 Cada circuito guarda por separado lo que aprenden los pilotos.
 
@@ -13,7 +32,7 @@ Cada circuito guarda por separado lo que aprenden los pilotos.
 
     ./jugar.sh            # abre http://localhost:8765/
 
-Opciones por URL: `?q=low` (calidad baja), `?laps=10`, `?track=urban|night|gp`, `?start=Q1`.
+Opciones por URL: `?q=low` (calidad baja), `?laps=10`, `?track=gp|urban|night|mount`, `?wx=dry|mixed|wet`, `?start=Q1`.
 
 ## Controles
 
