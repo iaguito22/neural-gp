@@ -426,6 +426,8 @@ export class Sim {
     // vuelta que no sirve de referencia (neutralizada o con paso por boxes): fuera de la gráfica de aprendizaje y de la degradación
     { const neutral = this.flag !== 'GREEN'; for (const c of cars) if (neutral || c.inPit) c.lapFlag = true; }
     this.buildNeighbors();
+    // tiempo de la vuelta pegado al de delante (a menos de ~0,8 s): en carrera, si es mucho, la vuelta es de tráfico, no de ritmo
+    for (const c of cars) { const n0 = c.nb[0]; if (n0 && !c.inPit && n0.rel < Math.max(15, c.v * 0.8)) c.trafT = (c.trafT || 0) + DT; }
     // vecinos (distancia relativa en pista) una vez por paso
     for (const car of cars) {
       if (car.out || car.state === 'garage') continue;
@@ -1462,8 +1464,9 @@ export class Sim {
           if (had || !race) this.emit({ type: 'fastest', car, time: lapT });
         }
       }
-      // también en carrera (si no, el panel de aprendizaje salía vacío), salvo la 1.ª: con salida parada va ~40 s más lenta
-      if (clean && !car.lapFlag && !(race && car.lap <= 1)) {
+      // también en carrera (si no, el panel de aprendizaje salía vacío), salvo las dos primeras: la salida parada y el pelotón aún agrupado (8–15 s más lentas)
+      const traffic = race && (car.trafT || 0) > lapT * 0.3;
+      if (clean && !car.lapFlag && !traffic && !(race && car.lap <= 2)) {
         car.brain.laps++;
         car.brain.lapHist.push({ w: this.weekend, s: ss.id, t: lapT, wet: car.kb !== car.brain, c: car.tyre.c });
         if (car.brain.lapHist.length > 200) car.brain.lapHist.shift();
@@ -1474,7 +1477,7 @@ export class Sim {
       this.emit({ type: 'lap', car, time: lapT, best: lapT === car.best });
     }
     car.prevSectors = car.curSectors.slice(); car.prevSecCol = (car.secCol || []).slice();
-    car.lapStart = this.t; car.sectorStart = this.t; car.sector = 0; car.lapClean = true; car.lapFlag = false; car.secCol = [];
+    car.lapStart = this.t; car.sectorStart = this.t; car.sector = 0; car.lapClean = true; car.lapFlag = false; car.trafT = 0; car.secCol = [];
     car.lapCP = []; car.cpK = -1; car.delta = null; car.deltaOwn = null;
     car.wobble = 1 + gauss(this.rng) * 0.0035 * (1.25 - car.drv.cons) * (1 + 2.2 * this.wx.wet);
     if (race) this.raceLap(car); else this.practiceLap(car);
