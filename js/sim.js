@@ -156,7 +156,7 @@ export class Sim {
     const T = this.T, N = T.N, v = car.vprof, kl = car.kl, len = car.len;
     const mu0 = this.plannedMu(car);
     car.muPlan = mu0;
-    const aero = AERO * car.team.aero, drag = CD * car.team.drag / (MASS + car.fuel);
+    const aero = AERO * this.aeroK(car), drag = CD * this.dragK(car) / (MASS + car.fuel);
     const muAt = (i) => { const z = T.zoneOf[i]; return z < 0 ? mu0 : mu0 * this.commitAt(car, z); };
     let i0 = 0, cnt = N, passes = 2;
     if (zone) { i0 = T.idx(zone.a - 700); cnt = Math.min(N, Math.round(zone.len + 760)); passes = 1; }
@@ -774,7 +774,7 @@ export class Sim {
     if (Math.abs(dev) <= 0.6) car.olT = 0;
     else if (!car.inPit && (car.olT = (car.olT || 0) - 1) <= 0) {
       car.olT = 4; car.olCap = Infinity;
-      const aero = AERO * team.aero, mu = car.muPlan * 0.97 * this.offWet(car, dev);
+      const aero = AERO * this.aeroK(car), mu = car.muPlan * 0.97 * this.offWet(car, dev);
       const vv = car.v;
       const dec = BRK * mu * (G + aero * vv * vv * 0.6);
       // (el desvío no se queda fijo: vuelve hacia el carril que ha elegido en unos 35 m; antes suponía que seguía igual de
@@ -822,7 +822,10 @@ export class Sim {
     let dk = 1;
     if (dirty < 1) { dk = Math.sqrt(1 - (1 - dirty) * (0.7 + 0.3 * car.drv.craft)); target *= dk; mult *= dk; }
     let save = 1; // en carrera, cuidando gomas: algo menos de ritmo y de agarre usado
-    if (race && car.mode === 'free' && this.raceLaps - car.lap > 2) { save = 0.994 + 0.004 * (1 - car.drv.tyre); target *= save; mult *= save; }
+    const pace = car.mgr?.pace;
+    if (race && pace === 'push') { save = 1.003; target *= save; mult *= save; }                 // mánager: a por todas (más errores y desgaste)
+    else if (race && pace === 'save') { save = 0.985; target *= save; mult *= save; }            // mánager: cuidar gomas
+    else if (race && car.mode === 'free' && this.raceLaps - car.lap > 2) { save = 0.994 + 0.004 * (1 - car.drv.tyre); target *= save; mult *= save; }
     // cuánto aprieta en esta curva (varía de una vuelta a otra: de ahí salen los errores)
     const exec = z >= 0 && z === car.zoneIn ? car.exec || 1 : 1;
     if (exec !== 1) target *= Math.sqrt(exec);
@@ -843,8 +846,8 @@ export class Sim {
     const talent = 1 + 0.018 * (car.drv.pace - 0.88);
     const muTrue = (1 + (car.exitBoost || 0)) * MU * team.grip * talent * tg * this.evoFactor() * (1 - 0.00035 * car.fuel) *
       (z >= 0 ? this.zoneTrue[z] : 1) * dirty * offLine * surfMu * (1 - 0.06 * car.dmg) * car.wobble;
-    const aero = AERO * team.aero * (car.drs ? 0.8 : 1) * (1 - 0.18 * car.parts.rw);
-    const drag = CD * team.drag * (car.drs ? 0.87 : 1) * tow;
+    const aero = AERO * this.aeroK(car) * (car.drs ? 0.8 : 1) * (1 - 0.18 * car.parts.rw);
+    const drag = CD * this.dragK(car) * (car.drs ? 0.87 : 1) * tow;
     const v = Math.max(0.1, car.v);
     const down = G + aero * v * v;
     const capT = muTrue * down;                                   // agarre que hay de verdad
@@ -969,7 +972,7 @@ export class Sim {
     const wearScale = race ? 1 / (this.raceLaps * T.L) : 1 / (20 * T.L);
     // gomas de lluvia en seco: se cuecen y se deshacen; lisos en mojado: se enfrían
     const wAt = this.wetAt(car), dryCook = C.wet ? 1 + Math.max(0, 0.25 - wAt) * (car.tyre.c === 'W' ? 22 : 12) : 1;
-    car.tyre.wear += ds * C.wear * wearScale * (0.5 + 0.7 * load * load + slideWear * 6 + (car.brake > 0.5 ? 0.25 : 0)) * mg * 1.05 * dryCook;
+    car.tyre.wear += ds * C.wear * wearScale * (0.5 + 0.7 * load * load + slideWear * 6 + (car.brake > 0.5 ? 0.25 : 0)) * mg * 1.05 * dryCook * (car.mgr?.pace === 'push' ? 1.3 : car.mgr?.pace === 'save' ? 0.72 : 1);
     const heat = (0.004 + 0.018 * load + 0.006 * car.brake) * C.warm * (C.wet ? 1 : 1 - 0.55 * wAt);
     car.tyre.temp += (heat * (1.15 - car.tyre.temp) - 0.0025 * car.tyre.temp * (car.v < 25 ? 3 : 1)) * DT * 5;
     car.tyre.temp = Math.max(0.2, Math.min(1.1, car.tyre.temp));
@@ -981,8 +984,8 @@ export class Sim {
     const dz = T.inDRS[car.idx = T.idx(car.s)];
     const drsAllowed = this.flag === 'GREEN' && (!race || car.lap >= 2) && !this.wx.noDRS;
     // el DRS se cierra antes de cualquier curva que sin el alerón no se pueda pasar a esta velocidad (mira ~1,3 s por delante)
-    let drsSafe = !!(dz || car.drs) && vCorner(kk, muTrue, AERO * team.aero * 0.8) > car.v * 1.06;
-    for (let q = 15; drsSafe && q < 40 + car.v * 1.3; q += 15) if (vCorner(car.kl[T.idx(car.s + q)], muTrue, AERO * team.aero * 0.8) < car.v * 1.06) drsSafe = false;
+    let drsSafe = !!(dz || car.drs) && vCorner(kk, muTrue, AERO * this.aeroK(car) * 0.8) > car.v * 1.06;
+    for (let q = 15; drsSafe && q < 40 + car.v * 1.3; q += 15) if (vCorner(car.kl[T.idx(car.s + q)], muTrue, AERO * this.aeroK(car) * 0.8) < car.v * 1.06) drsSafe = false;
     if (car.drs && !drsSafe) car.drs = false;
     else if (dz && car.drsOk && drsAllowed && car.brake === 0 && !car.inPit && drsSafe) car.drs = true;
     else if (car.drs && (car.brake > 0 || !dz)) { car.drs = false; if (!dz) car.drsOk = false; }
@@ -1264,6 +1267,7 @@ export class Sim {
   enterGarage(car) {
     car.state = 'garage'; car.pitPhase = 'box'; car.v = 0; car.inPit = true; car.drs = false; car.mistake = null; car.slide = 0; car.psi = 0; car.beta = 0;
     car.d = this.T.pit.d - 9; car.lapKind = 'out'; car.pitReq = false;
+    if (car.mgr && car.mgr.trimNext != null) { car.trim = car.mgr.trimNext; car.mgr.trimNext = null; this.rebuildProfile(car); }   // en el garaje se cambia el alerón
     if (car.plan) {
       car.plan.idx++; let nx = car.plan.runs[car.plan.idx]; if (nx && this.session.id === 'FP') nx.go = 0;
       // entró a cambiar gomas por el tiempo: vuelve a salir enseguida (en clasificación, con una salida más)
@@ -1316,6 +1320,12 @@ export class Sim {
         next = car.strategy.stints[car.stint]; car.wxC = null;
       }
       let c = next.c;
+      const M = car.mgr;
+      if (M) {
+        if (M.tyre) { c = M.tyre; car.strategy.stints = car.strategy.stints.slice(0, car.stint).concat([{ c, from: car.lap, to: this.raceLaps }]); }
+        M.box = false; M.tyre = null;
+        if (M.trimNext != null) { car.trim = M.trimNext; M.trimNext = null; }
+      }
       car.tyre = { c, wear: 0, temp: 0.6, age: 0, used: car.tyre.used };
       car.tyre.used.add(c); car.stops++; car.dmg = 0; car.parts = { fw: 0, rw: 0, susp: 0 }; car.pitReq = false;
       car.pitPhase = 'out'; car.lapKind = 'race';
@@ -1484,6 +1494,10 @@ export class Sim {
   }
 
   // ¿parar esta vuelta? plan + desgaste real + reacción al rival + VSC barato
+  // ajuste aerodinámico (mánager): -1 poca carga (más punta) … +1 mucha carga (más paso por curva)
+  aeroK(car) { return car.team.aero * (1 + 0.07 * (car.trim || 0)); }
+  dragK(car) { return car.team.drag * (1 + 0.06 * (car.trim || 0)); }
+
   pitDecision(car) {
     const T = this.T;
     if (car.finished || car.retired) return;
@@ -1491,6 +1505,10 @@ export class Sim {
     const st = car.strategy.stints[car.stint];
     if (!st) return;
     const needNew = car.tyre.used.size < 2 && !car.tyre.used.has('I') && !car.tyre.used.has('W');
+    // mánager: si ha llamado a boxes, entra; con la estrategia en manual, el equipo solo le mete por daños graves
+    const M = car.mgr;
+    if (M && M.box && lapsLeft > 0) { car.pitReq = true; return; }
+    if (M && !M.auto) { if (car.dmg > 0.5 && lapsLeft > 1) car.pitReq = true; return; }
     let want = false;
     if (car.stint < car.strategy.stints.length - 1 && car.lap + 1 >= st.to) want = true;
     if (car.tyre.wear > 0.8 && lapsLeft > 2) want = true;
@@ -1545,7 +1563,7 @@ export class Sim {
   }
   modelRun(car, nodes, z) {
     const T = this.T, N = T.N, K = this.mK, LEN = this.mLen, V = this.mV, { w0, wl } = this.mw;
-    const aero = AERO * car.team.aero, mass = MASS + car.fuel, drag = CD * car.team.drag / mass, inDRS = T.inDRS, zoneOf = T.zoneOf;
+    const aero = AERO * this.aeroK(car), mass = MASS + car.fuel, drag = CD * this.dragK(car) / mass, inDRS = T.inDRS, zoneOf = T.zoneOf;
     // agarre que cree tener en cada muestra de la ventana
     const MUA = this.mMu || (this.mMu = new Float64Array(N));
     const muZ = car.muPlan * this.commitAt(car, z), mu0 = car.muPlan, commit = car.kb.commit;

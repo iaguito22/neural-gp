@@ -7,10 +7,11 @@ import { buildScenery } from './scenery.js';
 import { buildCar } from './carModel.js';
 import { Director } from './director.js';
 import { UI, NEXT } from './ui.js';
-import { TEAMS } from './teams.js';
 import * as TX from './textures.js';
 import { EngineAudio } from './audio.js';
 import { Radio } from './radio.js';
+import { Manager } from './manager.js';
+import { TEAMS } from './teams.js';
 import { buildWeather } from './weather.js';
 
 // solo se guardan los ajustes: lo aprendido empieza de cero cada fin de semana (cada uno es un mundo)
@@ -187,6 +188,7 @@ async function main() {
     scenery.update(dt, focusPos, camera.position);
     app.audio.update(director.focus, director.type, camera, focusPos, app.skipping ? 99 : app.speed, sim, visuals);
     radio.update(dt, app.skipping ? 99 : app.speed);
+    app.manager?.update(dt);
     ui.update(dt);
     renderer.render(scene, camera);
   }
@@ -205,6 +207,9 @@ async function main() {
         <select id="iLaps" style="font:inherit;background:#1d1d27;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 8px">${[10, 15, 20, 30].map((l) => `<option ${l === sim.raceLaps ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <label class="lead" style="margin:0" for="iWx">Tiempo</label>
         <select id="iWx" style="${sel}">${[['random', 'Aleatorio'], ['dry', 'Seco'], ['mixed', 'Variable (chubascos)'], ['wet', 'Lluvia']].map(([v, l]) => `<option value="${v}" ${v === sim.weatherMode ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <label class="lead" style="margin:0" for="iMode">Modo</label>
+        <select id="iMode" style="${sel}"><option value="watch" ${settings.mode !== 'mgr' ? 'selected' : ''}>Espectador</option><option value="mgr" ${settings.mode === 'mgr' ? 'selected' : ''}>Mánager</option></select>
+        <select id="iTeam" style="${sel};${settings.mode === 'mgr' ? '' : 'display:none'}">${TEAMS.map((t) => `<option value="${t.id}" ${t.id === settings.team ? 'selected' : ''}>${t.name}</option>`).join('')}</select>
         <label class="lead" style="margin:0" for="iQ">Calidad</label>
         <select id="iQ" style="font:inherit;background:#1d1d27;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 8px"><option value="high" ${quality === 'high' ? 'selected' : ''}>Alta</option><option value="low" ${quality === 'low' ? 'selected' : ''}>Baja (portátil)</option></select>
         <span class="spacer" style="flex:1"></span>
@@ -215,12 +220,15 @@ async function main() {
     sim.raceLaps = +intro.querySelector('#iLaps').value;
     const q = intro.querySelector('#iQ').value, tk = intro.querySelector('#iTrack').value;
     sim.weatherMode = intro.querySelector('#iWx').value;
-    writeJSON(SETTINGS, { ...settings, quality: q, track: tk, raceLaps: sim.raceLaps, weather: sim.weatherMode });
+    const mode = intro.querySelector('#iMode').value, team = intro.querySelector('#iTeam').value;
+    writeJSON(SETTINGS, { ...settings, quality: q, track: tk, raceLaps: sim.raceLaps, weather: sim.weatherMode, mode, team });
     // otra calidad u otro circuito: se recarga con esos ajustes (sin parámetros en la URL que los contradigan)
     if (q !== quality || tk !== trackId) { location.href = location.pathname; return; }
+    if (mode === 'mgr') { app.manager = new Manager(sim, director, team); director.setFocus(app.manager.cars[0]); }
     ui.closeModal(); app.audio.start(); ui.syncButtons(); startSession(params.get('start') || 'FP');
   };
   // al cambiar de circuito se carga ya (la pantalla de inicio vuelve a salir con el circuito nuevo)
+  intro.querySelector('#iMode').onchange = (e) => { intro.querySelector('#iTeam').style.display = e.target.value === 'mgr' ? '' : 'none'; };
   intro.querySelector('#iTrack').onchange = (e) => { writeJSON(SETTINGS, { ...settings, quality: intro.querySelector('#iQ').value, track: e.target.value, raceLaps: +intro.querySelector('#iLaps').value }); location.href = location.pathname; };
   if (params.get('autostart')) { ui.closeModal(); startSession(params.get('autostart')); }
   requestAnimationFrame(loop);
