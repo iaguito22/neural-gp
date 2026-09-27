@@ -10,6 +10,7 @@ import { UI, NEXT } from './ui.js';
 import { TEAMS } from './teams.js';
 import * as TX from './textures.js';
 import { EngineAudio } from './audio.js';
+import { Radio } from './radio.js';
 import { buildWeather } from './weather.js';
 
 // solo se guardan los ajustes: lo aprendido empieza de cero cada fin de semana (cada uno es un mundo)
@@ -84,6 +85,7 @@ async function main() {
     },
   };
   const ui = new UI(app);
+  const radio = new Radio(sim, director, app);
 
   function startSession(id) {
     sim.startSession(id);
@@ -184,6 +186,7 @@ async function main() {
     world.update(dt, sim, focusPos, camera.position);
     scenery.update(dt, focusPos, camera.position);
     app.audio.update(director.focus, director.type, camera, focusPos, app.skipping ? 99 : app.speed, sim, visuals);
+    radio.update(dt, app.skipping ? 99 : app.speed);
     ui.update(dt);
     renderer.render(scene, camera);
   }
