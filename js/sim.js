@@ -423,6 +423,8 @@ export class Sim {
     if (ss.id === 'RACE') this.raceControl(); else this.practiceControl();
     if (this.vscT > 0) { this.vscT -= DT; if (this.vscT <= 0) { this.flag = 'GREEN'; this.emit({ type: 'flag', flag: 'GREEN' }); } }
     const cars = this.cars;
+    // vuelta que no sirve de referencia (neutralizada o con paso por boxes): fuera de la gráfica de aprendizaje y de la degradación
+    { const neutral = this.flag !== 'GREEN'; for (const c of cars) if (neutral || c.inPit) c.lapFlag = true; }
     this.buildNeighbors();
     // vecinos (distancia relativa en pista) una vez por paso
     for (const car of cars) {
@@ -1460,18 +1462,19 @@ export class Sim {
           if (had || !race) this.emit({ type: 'fastest', car, time: lapT });
         }
       }
-      if (clean && !race) {
+      // también en carrera (si no, el panel de aprendizaje salía vacío), salvo la 1.ª: con salida parada va ~40 s más lenta
+      if (clean && !car.lapFlag && !(race && car.lap <= 1)) {
         car.brain.laps++;
         car.brain.lapHist.push({ w: this.weekend, s: ss.id, t: lapT, wet: car.kb !== car.brain, c: car.tyre.c });
         if (car.brain.lapHist.length > 200) car.brain.lapHist.shift();
       }
       // degradación: tiempo corregido por gasolina frente a edad del neumático
       if (clean && ss.id === 'FP' && car.run?.kind === 'long' && this.wx.wet < 0.05) addDeg(car.brain, car.tyre.c, car.tyre.age, lapT - car.fuel * 0.03);
-      if (race && clean && car.tyre.age > 1 && this.wx.wet < 0.05) addDeg(car.brain, car.tyre.c, car.tyre.age, lapT - car.fuel * 0.03);
+      if (race && clean && !car.lapFlag && car.tyre.age > 1 && this.wx.wet < 0.05) addDeg(car.brain, car.tyre.c, car.tyre.age, lapT - car.fuel * 0.03);
       this.emit({ type: 'lap', car, time: lapT, best: lapT === car.best });
     }
     car.prevSectors = car.curSectors.slice(); car.prevSecCol = (car.secCol || []).slice();
-    car.lapStart = this.t; car.sectorStart = this.t; car.sector = 0; car.lapClean = true; car.secCol = [];
+    car.lapStart = this.t; car.sectorStart = this.t; car.sector = 0; car.lapClean = true; car.lapFlag = false; car.secCol = [];
     car.lapCP = []; car.cpK = -1; car.delta = null; car.deltaOwn = null;
     car.wobble = 1 + gauss(this.rng) * 0.0035 * (1.25 - car.drv.cons) * (1 + 2.2 * this.wx.wet);
     if (race) this.raceLap(car); else this.practiceLap(car);

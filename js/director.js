@@ -707,8 +707,10 @@ export class Director {
         const ah = this.sim.carAheadOnTrack(this.focus);
         // zoom con mesura: de lejos el coche se ve algo más pequeño en vez de llenar el plano
         let span = 7 + Math.max(0, cam.position.distanceTo(target) - 60) * 0.045;
-        if (ah && !ah.inPit && T.rel(this.focus.s, ah.s) < 40) {
-          const AV = this.vis[ah.i]; target.lerp(AV.root.position, 0.4); span += T.rel(this.focus.s, ah.s) * 0.55;
+        // (T.ahead, no T.rel: para el líder el «de delante» es el último, a -80 m, y el plano se iba detrás y a 3,5°)
+        const gapAh = ah ? T.ahead(this.focus.s, ah.s) : 1e9;
+        if (ah && !ah.inPit && gapAh < 40) {
+          const AV = this.vis[ah.i]; target.lerp(AV.root.position, 0.4); span += gapAh * 0.55;
         }
         this.smoothLook.copy(target);
         cam.lookAt(this.smoothLook);
