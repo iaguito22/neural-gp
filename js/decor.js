@@ -41,11 +41,12 @@ class Blocks {
   }
 }
 
-// ¿cabe un edificio (rectángulo orientado) sin tocar pista, muros, gradas ni lo ya ocupado?
+// ¿cabe un objeto/edificio/roca (rectángulo orientado o radio) sin tocar pista, muros, gradas ni lo ya ocupado?
 function makeFits(T, world, ctx) {
-  return (x, z, w, d, yaw, margin) => {
+  return (x, z, w, d, yaw = 0, margin = 2) => {
     const c = Math.cos(yaw), s = Math.sin(yaw);
-    if (!ctx.occ.every((o) => Math.hypot(o.x - x, o.z - z) > o.r + Math.max(w, d) * 0.5)) return false;
+    const rad = Math.max(w, d) * 0.5;
+    if (!ctx.occ.every((o) => Math.hypot(o.x - x, o.z - z) > o.r + rad)) return false;
     if (world.trackDist(x, z) > 230 + Math.hypot(w, d)) return true;       // lejos de pista, muros y gradas
     const pts = [[0, 0], [-w / 2, -d / 2], [w / 2, -d / 2], [w / 2, d / 2], [-w / 2, d / 2], [0, -d / 2], [0, d / 2], [-w / 2, 0], [w / 2, 0]];
     for (const [a, b] of pts) {
@@ -56,7 +57,16 @@ function makeFits(T, world, ctx) {
       const side = dx * T.lx[n.i] + dz * T.lz[n.i] >= 0 ? 1 : -1;
       if (n.d < world.barrier(sN, side) + margin) return false;
       if (between(T, sN, T.wrap(T.pit.entryA - 60), T.wrap(T.pit.exitB + 60)) && side < 0 && n.d < 160) return false;
-      for (const st of world.stands) if (st.side === side && between(T, sN, T.wrap(st.s0 - 10), T.wrap(st.s0 + st.len + 10)) && n.d < world.barrier(sN, side) + st.depth + 14) return false;
+      if (world.stands) {
+        for (const st of world.stands) {
+          if (st.side === side && between(T, sN, T.wrap(st.s0 - 14), T.wrap(st.s0 + st.len + 14)) && n.d < world.barrier(sN, side) + st.depth + 16 + margin) return false;
+        }
+      }
+      if (world.overheads) {
+        for (const o of world.overheads) {
+          if (Math.abs(T.rel(o.s, sN)) < o.len + 12 + margin && n.d < o.w + 8 + margin) return false;
+        }
+      }
     }
     return true;
   };
@@ -403,12 +413,82 @@ export function buildNight(ctx) {
   ctx.nightLit = lit;
 }
 
-// ------------------------------------------------------------------ Monte Alto: cordillera alpina, bosque de coníferas, chalets y taludes
+// // ------------------------------------------------------------------ Monte Alto: cordillera alpina, bosque de coníferas, chalets y taludes
 export function buildMountain(ctx) {
-  const { T, world, scene, G, r, quality } = ctx;
+  const { T, world, scene, r, quality } = ctx;
   const bb = world.bb;
   const ccx = (bb.x0 + bb.x1) / 2, ccz = (bb.z0 + bb.z1) / 2;
   const fits = makeFits(T, world, ctx);
+
+  // 0) AJUSTE DEL TERRENO: Asegurar que el terreno quede por debajo de la pista y pianos en todo el circuito
+  const nearest = world.nearest || T.nearest;
+  const tCell = 40, tGrid = new Map();
+  for (let i = 0; i < T.N; i += 2) {
+    const k = Math.floor(T.x[i] / tCell) * 100003 + Math.floor(T.z[i] / tCell);
+    if (!tGrid.has(k)) tGrid.set(k, []);
+    tGrid.get(k).push(i);
+  }
+
+  const robustGroundY = (x, z) => {
+    const n = nearest(x, z, 6);
+    if (n.i < 0) return world.hills(x, z) + 2;
+
+    let minTy = 1e9;
+    let maxB = 0;
+    const cx = Math.floor(x / tCell), cz = Math.floor(z / tCell);
+
+    for (let a = -3; a <= 3; a++) {
+      for (let b = -3; b <= 3; b++) {
+        const lst = tGrid.get((cx + a) * 100003 + cz + b);
+        if (!lst) continue;
+        for (const i of lst) {
+          const dx = T.x[i] - x, dz = T.z[i] - z;
+          if (dx * dx + dz * dz < 130 * 130) {
+            const s = i * T.ds;
+            const pL = T.pos(s, HALF_W + 1.8);
+            const pR = T.pos(s, -HALF_W - 1.8);
+            minTy = Math.min(minTy, pL[1], pR[1], T.y[i]);
+            const barrierDist = Math.max(world.barrier(s, 1), world.barrier(s, -1));
+            maxB = Math.max(maxB, barrierDist);
+          }
+        }
+      }
+    }
+    if (minTy > 1e8) minTy = T.y[n.i] - 0.45;
+
+    const blendStart = Math.max(maxB + 16, 50);
+    const blendEnd = blendStart + 200;
+    const d = n.d;
+
+    const t = Math.min(1, Math.max(0, (d - blendStart) / (blendEnd - blendStart)));
+    const e = t * t * (3 - 2 * t);
+
+    const baseY = minTy - 0.85;
+    const hillY = world.hills(x, z) + 2;
+
+    return baseY * (1 - e) + hillY * e;
+  };
+
+  world.groundY = robustGroundY;
+  ctx.G = robustGroundY;
+  const G = robustGroundY;
+
+  // Actualizar la malla de terreno creada en world.js
+  let terrainMesh = null;
+  scene.traverse((o) => {
+    if (o.isMesh && o.geometry?.type === 'PlaneGeometry' && o.geometry?.parameters?.width > 1000) {
+      terrainMesh = o;
+    }
+  });
+  if (terrainMesh) {
+    const posAttr = terrainMesh.geometry.attributes.position;
+    for (let i = 0; i < posAttr.count; i++) {
+      const vx = posAttr.getX(i), vz = posAttr.getZ(i);
+      posAttr.setY(i, robustGroundY(vx, vz));
+    }
+    posAttr.needsUpdate = true;
+    terrainMesh.geometry.computeVertexNormals();
+  }
 
   // 1) CORDILLERA LEJANA: Anillo montañoso alpino con crestas rocosas y cumbres nevadas
   {
@@ -567,9 +647,12 @@ export function buildMountain(ctx) {
             const rDist = B + 3.5 + nr * 4.2 + hash(s + nr) * 3;
             const rPos = [0, 0, 0];
             T.pos(s + (nr - 1) * 3.5, side * rDist, rPos);
-            const rgy = G(rPos[0], rPos[2]);
             const rScale = 1.4 + hash(s * 7.7 + nr) * 2.2 + Math.max(0, diff * 0.4);
-            rocks.push([rPos[0], rgy - 0.4, rPos[2], rScale, hash(s + nr * 13) * 6, nr % 2]);
+            const rRad = rScale * 2.2;
+            if (fits(rPos[0], rPos[2], rRad, rRad, 0, rScale + 2.0)) {
+              const rgy = G(rPos[0], rPos[2]);
+              rocks.push([rPos[0], rgy - 0.4, rPos[2], rScale, hash(s + nr * 13) * 6, nr % 2]);
+            }
           }
         }
       }
@@ -579,10 +662,10 @@ export function buildMountain(ctx) {
     for (let t = 0; t < nScattered * 3 && rocks.length < nScattered + 500; t++) {
       const rx = bb.x0 - 400 + r() * (bb.x1 - bb.x0 + 800);
       const rz = bb.z0 - 400 + r() * (bb.z1 - bb.z0 + 800);
-      const td = world.trackDist(rx, rz);
-      if (td > 25 && ctx.occ.every((o) => Math.hypot(o.x - rx, o.z - rz) > o.r + 3)) {
+      const rScale = 1.2 + r() * 3.8;
+      const rRad = rScale * 2.2;
+      if (fits(rx, rz, rRad, rRad, 0, rScale + 2.0)) {
         const rgy = G(rx, rz);
-        const rScale = 1.2 + r() * 3.8;
         rocks.push([rx, rgy - 0.3, rz, rScale, r() * 6.28, r() < 0.5 ? 0 : 1]);
       }
     }
@@ -641,7 +724,7 @@ export function buildMountain(ctx) {
       const x = x0 + r() * (x1 - x0), z = z0 + r() * (z1 - z0);
       const dn = mDens(x, z);
       if (dn < 0.25 && r() < 0.9) continue;
-      if (!ctx.clearOfTrack?.(x, z, 3.5) && !fits(x, z, 3.5, 3.5, 0, 3.5)) continue;
+      if (!fits(x, z, 3.5, 3.5, 0, 3.5)) continue;
       if (!ctx.occ.every((o) => Math.hypot(o.x - x, o.z - z) > o.r + 3.5)) continue;
       treePts.push([x, G(x, z) - 0.2, z, r()]);
     }
@@ -651,7 +734,7 @@ export function buildMountain(ctx) {
         const B = world.barrier(s, side);
         const p = [0, 0, 0];
         T.pos(s, side * (B + 10 + hash(s * 2.1) * 8), p);
-        if (fits(p[0], p[2], 3, 3, 0, 3) && ctx.occ.every((o) => Math.hypot(o.x - p[0], o.z - p[2]) > o.r + 3)) {
+        if (fits(p[0], p[2], 3.5, 3.5, 0, 3.5) && ctx.occ.every((o) => Math.hypot(o.x - p[0], o.z - p[2]) > o.r + 3)) {
           treePts.push([p[0], G(p[0], p[2]) - 0.2, p[2], hash(s + side)]);
         }
       }

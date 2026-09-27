@@ -12,14 +12,22 @@ const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vecto
 export function buildScenery(T, scene, world, quality, sunDir) {
   const r = rng(4242);
   const occ = [];
-  const G = world.groundY;
+  const G = (x, z) => world.groundY(x, z);
   const maxB = (s) => Math.max(world.barrier(s, 1), world.barrier(s, -1));
   const clearOfTrack = (x, z, rad) => {
     const n = world.nearest(x, z, 6);
     if (n.i < 0) return true;
     const s = n.i * T.ds;
+    const dx = x - T.x[n.i], dz = z - T.z[n.i];
+    const side = dx * T.lx[n.i] + dz * T.lz[n.i] >= 0 ? 1 : -1;
     const pitSide = between(T, s, T.wrap(T.pit.entryA - 60), T.wrap(T.pit.exitB + 60));
-    return n.d > maxB(s) + rad + 14 + (pitSide ? 40 : 0);
+    if (n.d < maxB(s) + rad + 14 + (pitSide ? 40 : 0)) return false;
+    if (world.stands) {
+      for (const st of world.stands) {
+        if (st.side === side && between(T, s, T.wrap(st.s0 - 12), T.wrap(st.s0 + st.len + 12)) && n.d < world.barrier(s, side) + st.depth + 14 + rad) return false;
+      }
+    }
+    return true;
   };
   const free = (x, z, rad) => clearOfTrack(x, z, rad) && occ.every((o) => Math.hypot(o.x - x, o.z - z) > o.r + rad);
   const claim = (x, z, rad) => occ.push({ x, z, r: rad });

@@ -1,56 +1,78 @@
 // Motor V6 por explosiones: en vez de osciladores (sonaba a sintetizador), un tren de pulsos de presión —uno por
 // cilindro, 3 por vuelta del cigüeñal— con pequeñas diferencias entre cilindros y de un ciclo a otro, que pasa por
-// el escape (resonancias + tubo). Con gas los pulsos son fuertes y secos; sin gas, débiles y con algún petardeo.
+// el escape (resonancias + tubo). Con gas los pulsos son densos, graves y con cuerpo; sin gas, suaves y con petardeo.
 // Es una función pura para poder usarla dentro de un AudioWorklet y también en node (tools/engineWav.mjs).
 export function makeV6(sr, seed = 1) {
   let rs = seed >>> 0 || 1;
   const rnd = () => { rs ^= rs << 13; rs ^= rs >>> 17; rs ^= rs << 5; return (rs >>> 0) / 4294967296; };
-  const cyl = [1.0, 0.86, 1.1, 0.93, 1.04, 0.84];      // cada cilindro suena un poco distinto (bancadas, escape)
+  const cyl = [1.02, 0.88, 1.08, 0.92, 1.05, 0.85];      // balance y asimetría de flujo entre cilindros / bancadas
   // resonador de 2 polos (paso banda) con frecuencia y Q
   const res = (f, q) => ({ f, q, y1: 0, y2: 0 });
-  const R = [res(420, 2.2), res(1150, 3.0), res(2600, 3.5), res(160, 1.2), res(85, 1.4)];
-  const RG = [0.9, 0.55, 0.22, 0.6, 0.9];   // (85 Hz: cuerpo del bloque, los subgraves)
+  const R = [res(360, 1.9), res(860, 1.8), res(1900, 1.4), res(150, 1.4), res(80, 1.6)];
   const comb = new Float32Array(Math.round(sr * 0.01)); let cw = 0;
+  let combLp = 0;
   let phase = 0, env = 0, nEnv = 0, lp = 0, last = 0, dc = 0, next = 0;
   return function process(out, n, rpm, load, cut) {
     const cycleHz = rpm / 120;                          // ciclo de 4 tiempos = 2 vueltas
     const fire = cycleHz * 6;
-    const tau = Math.max(0.0006, 0.35 / fire);         // cuánto dura cada pulso
-    const dEnv = Math.exp(-1 / (sr * tau)), dNoise = Math.exp(-1 / (sr * 0.0012));
-    const bright = 0.18 + 0.55 * load;                  // con gas, pulsos más secos (más agudos)
-    for (const r of R) { const w = 2 * Math.PI * r.f / sr; r.a1 = -2 * Math.exp(-w / (2 * r.q)) * Math.cos(w); r.a2 = Math.exp(-w / r.q); r.b = 1 - Math.exp(-w / (2 * r.q)); }
+    const tau = Math.max(0.0006, (0.35 + 0.22 * load) / fire); // pulso con mayor masa acústica bajo carga
+    const dEnv = Math.exp(-1 / (sr * tau)), dNoise = Math.exp(-1 / (sr * 0.0013));
+    const bright = 0.18 + 0.15 * load;                  // brillo controlado con gas para evitar silbido de sintetizador
+    // Ganancias de formantes: con gas dominan los subgraves y cuerpo (80 y 150 Hz)
+    const RG = [
+      0.90 + 0.12 * load,                               // 360 Hz: garganta de escape / rugido medio
+      0.55 - 0.20 * load,                               // 860 Hz: mordida mecánica
+      0.22 - 0.12 * load,                               // 1900 Hz: timbre metálico suave
+      0.60 + 0.45 * load,                               // 150 Hz: pegada de cigüeñal y escape
+      0.90 + 0.55 * load                                // 80 Hz: subgrave y masa del bloque
+    ];
+    for (const r of R) {
+      const w = 2 * Math.PI * r.f / sr;
+      r.a1 = -2 * Math.exp(-w / (2 * r.q)) * Math.cos(w);
+      r.a2 = Math.exp(-w / r.q);
+      r.b = 1 - Math.exp(-w / (2 * r.q));
+    }
     for (let i = 0; i < n; i++) {
-      phase += cycleHz / sr;
+      // Micro-irregularidad torsional / combustión estocástica bajo carga
+      const jitter = (rnd() * 2 - 1) * 0.024 * load;
+      phase += (cycleHz * (1 + jitter)) / sr;
       if (phase >= 1) phase -= 1;
       const k = Math.floor(phase * 6);
       if (k !== next) {
         next = k;
         // explosión: fuerza según gas; en corte de encendido no hay
         const onLoad = 0.28 + 0.72 * load;
-        let a = cyl[k] * onLoad * (0.92 + 0.16 * rnd()) * (1 - cut);
-        // sin gas y con vueltas: a veces una explosión en el escape (petardeo)
+        let a = cyl[k] * onLoad * (0.90 + 0.20 * rnd()) * (1 - cut);
+        // sin gas y con vueltas: petardeo en el escape
         if (load < 0.15 && rpm > 8000 && rnd() < 0.05) a = 1.3 + rnd() * 0.6;
-        env += a; nEnv += a * (0.35 + 0.5 * (1 - load));
+        env += a;
+        nEnv += a * (0.35 + 0.5 * (1 - load) + 0.28 * load);
       }
+      // Textura mecánica / raspado de combustión
       const noise = (rnd() * 2 - 1) * nEnv;
-      const x = env + noise * 0.6;
+      const x = env + noise * (0.50 + 0.18 * load);
       env *= dEnv; nEnv *= dNoise;
-      lp += bright * (x - lp);                          // más o menos brillo según el gas
-      let y = lp * 0.35;
+      lp += bright * (x - lp);
+      let y = lp * (0.32 + 0.06 * (1 - load));
       for (let r = 0; r < R.length; r++) {
         const Z = R[r], v = Z.b * lp - Z.a1 * Z.y1 - Z.a2 * Z.y2;
         Z.y2 = Z.y1; Z.y1 = v; y += v * RG[r];
       }
-      // tubo de escape: eco muy corto que da el timbre metálico
-      // (el retardo cambia con las vueltas, como la onda de presión en el escape: fijo sonaba a chicharra metálica)
+      // Tubo de escape con amortiguación de agudos en la realimentación
       const dly = Math.min(comb.length - 2, sr * (0.0016 + 0.0022 * (1 - (rpm - 4000) / 9000)));
       const rp = cw - dly, i0 = Math.floor(rp), fr = rp - i0, L = comb.length;
       const del = comb[(i0 + L) % L] * (1 - fr) + comb[(i0 + 1 + L) % L] * fr;
-      const yc = y + 0.28 * del; comb[cw] = yc; cw = cw + 1 >= L ? 0 : cw + 1;
-      // quitar continua y saturar suave
+      const combDamp = 0.22 + 0.48 * (1 - load);
+      combLp += combDamp * (del - combLp);
+      const fbGain = 0.28 * (1 - 0.35 * load);
+      const yc = y + fbGain * combLp;
+      comb[cw] = yc; cw = cw + 1 >= L ? 0 : cw + 1;
+      // Quitar continua y saturación analógica suave
       dc += 0.0015 * (yc - dc);
-      const s = Math.tanh((yc - dc) * 0.25);
-      last = s; out[i] = s * 0.75;
+      const dry = yc - dc;
+      const drive = 0.25 + 0.06 * load;
+      const s = Math.tanh(dry * drive);
+      last = s; out[i] = s * 0.80;
     }
     return last;
   };
