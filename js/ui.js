@@ -34,7 +34,7 @@ export class UI {
       <div class="grp"><button id="bAuto" class="on" title="Realización automática (A)">AUTO</button><button id="bAutoD" title="Automática pegada al piloto elegido: solo cambia de plano (P)">AUTO PILOTO</button>${camBtns}</div>
       <div class="grp"><button id="bPrev" title="Piloto anterior ([)">‹</button><span class="lbl" id="focusLbl">—</span><button id="bNext" title="Piloto siguiente (])">›</button></div>
       <div class="spacer"></div>
-      <div class="grp" id="speeds"><button id="bReplay" title="Repetición de los últimos 12 s del piloto enfocado (R)">↺ Repetir</button>${[0, 1, 2, 4, 8, 16, 32].map((s) => `<button data-speed="${s}">${s === 0 ? 'II' : s + '×'}</button>`).join('')}</div>
+      <div class="grp" id="speeds"><button id="bReplay" title="Repetición de los últimos 12 s del piloto enfocado (R)">Repetir</button>${[0, 1, 2, 4, 8, 16, 32].map((s) => `<button data-speed="${s}">${s === 0 ? 'II' : s + '×'}</button>`).join('')}</div>
  <div class="grp"><button id="bSound" title="Sonido de motor (M)">Sonido</button><button id="bSkip" title="Simular el resto de la sesión a máxima velocidad">Saltar</button><button id="bLearn" class="red" title="Qué han aprendido los pilotos (L)">IA · Aprendizaje</button></div>`;
     c.querySelectorAll('[data-cam]').forEach((b) => (b.onclick = () => this.dir.setType(b.dataset.cam)));
     c.querySelectorAll('[data-speed]').forEach((b) => (b.onclick = () => this.app.setSpeed(+b.dataset.speed)));
@@ -380,12 +380,22 @@ export class UI {
     if (this.pausedSpeed != null) { this.app.setSpeed(this.pausedSpeed); this.pausedSpeed = null; }
   }
   pauseMenu() {
-    const was = this.app.speed;
-    const m = this.modal(`<header><span class="kicker">PAUSA</span><h2>Menú</h2></header>
-      <div class="body"><p class="lead">Al reiniciar, los pilotos olvidan todo lo aprendido y se vuelve a la pantalla de inicio.</p>
-      <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:8px"><button class="btn ghost" id="pRestart">Reiniciar fin de semana</button><button class="btn" id="pGo">Seguir</button></div></div>`);
+    const was = this.app.speed, sim = this.sim, ss = sim.session;
+    const what = ss ? `${SESSIONS[ss.id].label}${ss.id === 'RACE' ? ` · vuelta ${Math.max(1, (sim.raceOrder?.[0]?.lap ?? 0) + 1)} de ${sim.raceLaps}` : ''}` : '';
+    const m = this.modal(`<div class="pause">
+        <div class="ph"><span class="kicker">PAUSA</span><b>${esc(this.T.meta.name)}</b><span>${what}</span></div>
+        <button class="btn big" id="pGo">Seguir</button>
+        <div class="prow"><button id="pReplay">Repetición</button><button id="pLearn">IA · Aprendizaje</button><button id="pSound">${this.app.audio?.on ? 'Silenciar' : 'Activar sonido'}</button></div>
+        <p class="keys"><b>A</b> auto · <b>1–8</b> planos · <b>Espacio</b> pausa · <b>+/−</b> velocidad · <b>R</b> repetición · <b>L</b> aprendizaje · <b>H</b> ocultar HUD</p>
+        <button class="danger" id="pRestart">Reiniciar fin de semana</button>
+        <p class="warn">Los pilotos olvidan todo lo aprendido y se vuelve a la pantalla de inicio.</p>
+      </div>`);
+    m.querySelector('.sheet').classList.add('pauseSheet');
     this.pausedSpeed = was; this.app.setSpeed(0);
     m.querySelector('#pGo').onclick = () => this.closeModal();
+    m.querySelector('#pReplay').onclick = () => { this.closeModal(); this.app.replay?.replayLast(); };
+    m.querySelector('#pLearn').onclick = () => this.showLearning();
+    m.querySelector('#pSound').onclick = (e) => { this.app.audio.toggle(); this.syncButtons(); e.target.textContent = this.app.audio.on ? 'Silenciar' : 'Activar sonido'; };
     m.querySelector('#pRestart').onclick = () => this.app.restart();
   }
   modal(html) {

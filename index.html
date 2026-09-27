@@ -251,6 +251,19 @@ body.replay #sessionBar, body.replay #radio, body.replay #battle, body.replay #q
 .start .go { width: 100%; margin-top: 22px; padding: 14px; font-size: 16px; border-radius: 999px; }
 .start .keys { color: var(--muted); font-size: 11px; margin: 12px 0 0; text-align: center; line-height: 1.6; }
 .start .keys b { color: #d9d9df; }
+.sheet.pauseSheet { width: min(420px, 100%); border-radius: 22px; background: rgba(14,14,20,0.95); }
+.pause { padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+.pause .ph { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; margin-bottom: 4px; }
+.pause .ph .kicker { background: var(--red); padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 900; letter-spacing: 0.1em; }
+.pause .ph b { font-size: 26px; font-weight: 900; margin-top: 6px; } .pause .ph span { color: var(--muted); font-size: 13px; }
+.pause .btn.big { width: 100%; padding: 14px; font-size: 17px; border-radius: 999px; }
+.pause .prow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pause .prow button, .pause .danger { border: 0; border-radius: 12px; padding: 10px 6px; font: 700 12.5px 'Titillium Web', sans-serif; background: rgba(255,255,255,0.07); color: #fff; cursor: pointer; }
+.pause .prow button:hover { background: rgba(255,255,255,0.14); }
+.pause .danger { background: transparent; color: #ff8a80; border: 1px solid rgba(255,138,128,0.35); margin-top: 6px; }
+.pause .danger:hover { background: rgba(255,138,128,0.1); }
+.pause .keys { color: var(--muted); font-size: 11px; margin: 2px 0 0; text-align: center; line-height: 1.6; } .pause .keys b { color: #d9d9df; }
+.pause .warn { color: var(--muted); font-size: 11px; margin: -4px 0 0; text-align: center; }
 .start .sched { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .start .sched div { background: rgba(255,255,255,0.04); border-radius: 14px; padding: 10px 12px; }
 .start .sched b { display: block; font-size: 14px; font-weight: 900; }
@@ -294,7 +307,7 @@ body.replay #sessionBar, body.replay #radio, body.replay #battle, body.replay #q
 
 /* ---------- paneles */
 .modal { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(5, 5, 10, 0.55); backdrop-filter: blur(3px); z-index: 5; padding: 16px; }
-.sheet { background: #121219; border-radius: 14px; width: min(1040px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.6); border: 1px solid var(--line); }
+.sheet { background: #121219; border-radius: 18px; width: min(1040px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.6); border: 1px solid var(--line); }
 .sheet header { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: #121219; z-index: 1; }
 .sheet header h2 { margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 0.02em; text-wrap: balance; }
 .sheet header .kicker { background: var(--red); padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 900; letter-spacing: 0.1em; }
