@@ -37,7 +37,7 @@ export function makeV6(sr, seed = 1) {
     }
     for (let i = 0; i < n; i++) {
       // Micro-irregularidad torsional / combustión estocástica bajo carga
-      const jitter = (rnd() * 2 - 1) * 0.024 * load;
+      const jitter = (rnd() * 2 - 1) * 0.008 * load;   // (con 0,024 las explosiones salían a destiempo: petardeaba con gas)
       phase += (cycleHz * (1 + jitter)) / sr;
       if (phase >= 1) phase -= 1;
       const k = Math.floor(phase * 6);
@@ -47,7 +47,7 @@ export function makeV6(sr, seed = 1) {
         const onLoad = 0.28 + 0.72 * load;
         // las dos bancadas no suenan igual (escapes de distinta longitud): esa alternancia es la que da energía a media
         // frecuencia de encendido, el tono grave que se oye por debajo del aullido
-        const bank = k % 2 ? 1 - 0.32 * load : 1 + 0.32 * load;
+        const bank = k % 2 ? 1 - 0.26 * load : 1 + 0.26 * load;
         let a = cyl[k] * bank * onLoad * (0.90 + 0.20 * rnd()) * (1 - cut);
         // sin gas y con vueltas: petardeo en el escape
         if (load < 0.15 && rpm > 8000 && rnd() < 0.05) a = 1.3 + rnd() * 0.6;
@@ -64,7 +64,7 @@ export function makeV6(sr, seed = 1) {
         const Z = R[r], v = Z.b * lp - Z.a1 * Z.y1 - Z.a2 * Z.y2;
         Z.y2 = Z.y1; Z.y1 = v; y += v * RG[r];
       }
-      { const v = half.b * lp - half.a1 * half.y1 - half.a2 * half.y2; half.y2 = half.y1; half.y1 = v; y += v * 1.3 * load; }   // (sin gas, nada: la retención gustaba como estaba)
+      { const v = half.b * lp - half.a1 * half.y1 - half.a2 * half.y2; half.y2 = half.y1; half.y1 = v; y += v * 1.0 * load; }   // (sin gas, nada: la retención gustaba como estaba)
       // Tubo de escape con amortiguación de agudos en la realimentación
       const dly = Math.min(comb.length - 2, sr * (0.0016 + 0.0022 * (1 - (rpm - 4000) / 9000)));
       const rp = cw - dly, i0 = Math.floor(rp), fr = rp - i0, L = comb.length;

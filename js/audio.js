@@ -676,14 +676,14 @@ export class EngineAudio {
       if (curGear > this.prevGear) {
         // Subida de marcha: microcorte de encendido (50 ms) + bang explosivo de escape + thump grave
         this.shiftCutUntil = t + 0.050;
+        // (bajada en 4 ms, no de golpe: un salto a 0 chascaba en cada cambio)
         this.engineGain.gain.cancelScheduledValues(t);
-        this.engineGain.gain.setValueAtTime(0.001, t);
-        this.engineGain.gain.setValueAtTime(0.001, t + 0.045);
+        this.engineGain.gain.setTargetAtTime(0.06, t, 0.004);
         this.engineGain.gain.setTargetAtTime(0.42 + curThrottle * 0.35, t + 0.050, 0.010);
 
         // Detonación seca y potente de escape
         this.crackleGain.gain.cancelScheduledValues(t);
-        this.crackleGain.gain.setValueAtTime(0.85, t);
+        this.crackleGain.gain.setValueAtTime(0.3, t);
         this.crackleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.035);
 
         // Thump grave de par motor (120 Hz)
@@ -698,7 +698,7 @@ export class EngineAudio {
         this.thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.080);
 
         this.crackleGain.gain.cancelScheduledValues(t);
-        this.crackleGain.gain.setValueAtTime(0.45, t);
+        this.crackleGain.gain.setValueAtTime(0.25, t);
         this.crackleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.050);
       }
       this.prevGear = curGear;
@@ -786,7 +786,10 @@ export class EngineAudio {
     this.raspGain.gain.setTargetAtTime(this.v6 ? 0 : 0.06 + curThrottle * 0.12, t, 0.04);
     if (this.v6) {
       const P = this.v6;
-      P.rpm = effRpm * focusDoppler; P.load = inShiftCut ? 0 : curThrottle; P.cut = inShiftCut ? 1 : 0;
+      // en cada marcha las vueltas solo van de 7000 a 12200 (×1,7): se exagera la subida para que el tono suba de verdad
+      // al estirar la marcha (×2,7), como en la tele
+      const rpmA = 7000 * Math.pow(effRpm / 7000, 1.8);
+      P.rpm = rpmA * focusDoppler; P.load = inShiftCut ? 0 : curThrottle; P.cut = inShiftCut ? 1 : 0;
     }
 
     // EQ y resonancias formantes

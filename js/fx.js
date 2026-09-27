@@ -96,9 +96,9 @@ export function buildFx(scene, T, sim, visuals, world) {
   }
 
   // =========================================================================
-  // 2. SISTEMA DE CHISPAS (Impacto en muro / contacto fuerte)
+  // 2. SISTEMA DE CHISPAS (Impactos y Patines de titanio / Skid blocks)
   // =========================================================================
-  const MAX_SPARKS = 1200;
+  const MAX_SPARKS = 4500;
   const spkPos = new Float32Array(MAX_SPARKS * 3);
   const spkCol = new Float32Array(MAX_SPARKS * 3);
   const spkSize = new Float32Array(MAX_SPARKS);
@@ -109,6 +109,30 @@ export function buildFx(scene, T, sim, visuals, world) {
   const spkMaxLife = new Float32Array(MAX_SPARKS);
   const spkGroundY = new Float32Array(MAX_SPARKS);
   let spkLive = 0;
+
+  const isNight = !!(T?.meta?.night || world?.night);
+  const trackN = T.N || 1000;
+  const trackDs = T.ds || 1.0;
+
+  // Curvatura vertical (compresiones / valles y crestas / cambios de rasante)
+  const trackD2y = new Float32Array(trackN);
+  const span = Math.max(2, Math.round(3.5 / trackDs));
+  const spanDistSq = (span * trackDs) ** 2;
+  if (T.y && T.y.length >= trackN) {
+    for (let i = 0; i < trackN; i++) {
+      const iPrev = (i - span + trackN) % trackN;
+      const iNext = (i + span) % trackN;
+      trackD2y[i] = (T.y[iNext] - 2 * T.y[i] + T.y[iPrev]) / spanDistSq;
+    }
+  }
+
+  // Estado de ráfagas intermitentes por coche (hasta 24 coches)
+  const carSpk = Array.from({ length: 24 }, () => ({
+    burstTimer: 0,
+    cooldown: 0,
+    burstDuration: 0,
+    intensity: 0,
+  }));
 
   const spkGeo = new THREE.BufferGeometry();
   spkGeo.setAttribute('position', new THREE.BufferAttribute(spkPos, 3).setUsage(THREE.DynamicDrawUsage));
@@ -134,7 +158,7 @@ export function buildFx(scene, T, sim, visuals, world) {
         vColor = aColor;
         vAlpha = aAlpha;
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = clamp(aSize * uScale / max(0.3, -mvPosition.z), 1.0, 100.0);
+        gl_PointSize = clamp(aSize * uScale / max(0.3, -mvPosition.z), 1.0, 140.0);
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
@@ -155,6 +179,12 @@ export function buildFx(scene, T, sim, visuals, world) {
   sparksMesh.frustumCulled = false;
   sparksMesh.renderOrder = 6;
   scene.add(sparksMesh);
+
+  const tmpSpkLocal = new THREE.Vector3();
+  const tmpSpkWld = new THREE.Vector3();
+  const tmpFwd = new THREE.Vector3();
+  const tmpRt = new THREE.Vector3();
+  const tmpUp = new THREE.Vector3();
 
   function emitSparks(x, y, z, baseVx, baseVy, baseVz, count = 25, speed = 14) {
     for (let c = 0; c < count; c++) {
@@ -181,6 +211,93 @@ export function buildFx(scene, T, sim, visuals, world) {
       spkCol[k * 3 + 2] = isWhite ? 0.8 : 0.05 + Math.random() * 0.15;
       spkSize[k] = 0.08 + Math.random() * 0.08;
       spkAlpha[k] = 1.0;
+    }
+  }
+
+  function emitSkidSparks(car, rootPos, rootQuat, count, intensity, nightMode) {
+    tmpFwd.set(0, 0, 1).applyQuaternion(rootQuat);
+    tmpRt.set(1, 0, 0).applyQuaternion(rootQuat);
+    tmpUp.set(0, 1, 0).applyQuaternion(rootQuat);
+
+    const carV = car.v || 70;
+    const groundY = rootPos.y;
+
+    for (let c = 0; c < count; c++) {
+      if (spkLive >= MAX_SPARKS) return;
+      const k = spkLive++;
+
+      // Coordenadas locales del coche: centro del suelo (x ≈ 0, z entre +0.8 y -1.2, y ≈ 0.02)
+      // Patines delantero (+0.7), central (-0.2) y trasero (-1.0)
+      const skidChoice = Math.random();
+      const lz = skidChoice < 0.35
+        ? 0.45 + Math.random() * 0.35
+        : (skidChoice < 0.70
+            ? -0.40 + Math.random() * 0.50
+            : -1.20 + Math.random() * 0.45);
+      const lx = (Math.random() - 0.5) * (skidChoice < 0.35 ? 0.14 : 0.26);
+      const ly = 0.015 + Math.random() * 0.015;
+
+      tmpSpkLocal.set(lx, ly, lz);
+      tmpSpkWld.copy(tmpSpkLocal).applyQuaternion(rootQuat).add(rootPos);
+
+      spkPos[k * 3] = tmpSpkWld.x;
+      spkPos[k * 3 + 1] = tmpSpkWld.y;
+      spkPos[k * 3 + 2] = tmpSpkWld.z;
+
+      // Expulsión hacia atrás respecto al coche en coordenadas mundo
+      const vFwd = carV * (0.08 + Math.random() * 0.24);
+      const vLat = (Math.random() - 0.5) * (2.2 + Math.random() * 3.6);
+      const vUp = 0.25 + Math.random() * 1.8;
+
+      spkVel[k * 3] = tmpFwd.x * vFwd + tmpRt.x * vLat + tmpUp.x * vUp;
+      spkVel[k * 3 + 1] = tmpFwd.y * vFwd + tmpRt.y * vLat + tmpUp.y * vUp;
+      spkVel[k * 3 + 2] = tmpFwd.z * vFwd + tmpRt.z * vLat + tmpUp.z * vUp;
+
+      spkLife[k] = 0;
+      spkMaxLife[k] = 0.20 + Math.random() * 0.30; // se apaga en 0.2-0.5 s
+      spkGroundY[k] = groundY;
+
+      // Chorro de chispas naranja-blanco
+      const rType = Math.random();
+      if (nightMode) {
+        // De noche brillan más (aditivas)
+        if (rType < 0.38) {
+          spkCol[k * 3] = 1.95;
+          spkCol[k * 3 + 1] = 1.85;
+          spkCol[k * 3 + 2] = 1.45;
+          spkSize[k] = 0.042 + Math.random() * 0.025;
+        } else if (rType < 0.82) {
+          spkCol[k * 3] = 1.95;
+          spkCol[k * 3 + 1] = 0.85 + Math.random() * 0.35;
+          spkCol[k * 3 + 2] = 0.12 + Math.random() * 0.10;
+          spkSize[k] = 0.038 + Math.random() * 0.021;
+        } else {
+          spkCol[k * 3] = 1.65;
+          spkCol[k * 3 + 1] = 0.45 + Math.random() * 0.20;
+          spkCol[k * 3 + 2] = 0.04 + Math.random() * 0.06;
+          spkSize[k] = 0.032 + Math.random() * 0.017;
+        }
+        spkAlpha[k] = 1.0;
+      } else {
+        // De día: tonos vivos naranja-blanco
+        if (rType < 0.35) {
+          spkCol[k * 3] = 1.0;
+          spkCol[k * 3 + 1] = 0.98;
+          spkCol[k * 3 + 2] = 0.88;
+          spkSize[k] = 0.035 + Math.random() * 0.021;
+        } else if (rType < 0.80) {
+          spkCol[k * 3] = 1.0;
+          spkCol[k * 3 + 1] = 0.62 + Math.random() * 0.28;
+          spkCol[k * 3 + 2] = 0.08 + Math.random() * 0.10;
+          spkSize[k] = 0.032 + Math.random() * 0.017;
+        } else {
+          spkCol[k * 3] = 1.0;
+          spkCol[k * 3 + 1] = 0.38 + Math.random() * 0.18;
+          spkCol[k * 3 + 2] = 0.03 + Math.random() * 0.04;
+          spkSize[k] = 0.028 + Math.random() * 0.014;
+        }
+        spkAlpha[k] = 0.95;
+      }
     }
   }
 
@@ -511,6 +628,13 @@ export function buildFx(scene, T, sim, visuals, world) {
     spkGeo.setDrawRange(0, 0);
     grvGeo.setDrawRange(0, 0);
 
+    for (let i = 0; i < carSpk.length; i++) {
+      carSpk[i].burstTimer = 0;
+      carSpk[i].cooldown = 0;
+      carSpk[i].burstDuration = 0;
+      carSpk[i].intensity = 0;
+    }
+
     for (const car of sim.cars) {
       const V = visuals[car.i];
       if (!V) continue;
@@ -563,8 +687,11 @@ export function buildFx(scene, T, sim, visuals, world) {
     spkUniforms.uScale.value = uScaleVal;
     grvUniforms.uScale.value = uScaleVal;
 
+    const wet = sim.wx?.wet ?? 0;
+    const wetFactor = Math.max(0.08, 1.0 - wet * 0.85); // en mojado muchas menos
+
     // -----------------------------------------------------------------------
-    // A. Emisión de humo y daños en coches
+    // A. Emisión de humo, chispas de patines y daños en coches
     // -----------------------------------------------------------------------
     for (let ci = 0; ci < sim.cars.length; ci++) {
       const car = sim.cars[ci];
@@ -676,6 +803,71 @@ export function buildFx(scene, T, sim, visuals, world) {
           }
         }
       }
+
+      // 4. Chispas de los patines (skid blocks de titanio)
+      if (car.state !== 'grid' && !car.inPit && car.v > 60) {
+        const st = carSpk[ci] || (carSpk[ci] = { burstTimer: 0, cooldown: 0, burstDuration: 0, intensity: 0 });
+
+        if (st.cooldown > 0) st.cooldown -= dt;
+        if (st.burstTimer > 0) st.burstTimer -= dt;
+
+        // Factores de roce de patines:
+        // Velocidad: por encima de ~250 km/h (~69.4 m/s)
+        const v = car.v;
+        const vExcess = Math.max(0, v - 68.0);
+        const aeroDownforce = (v / 75.0) ** 2 * (vExcess / 11.5);
+
+        // Compresiones (cambio de pendiente hacia arriba / valle) y cambios de rasante
+        const sIdx = T.idx ? T.idx(car.s) : Math.floor(((car.s % T.L + T.L) % T.L) / trackDs);
+        const d2yVal = trackD2y[sIdx] || 0;
+        const vertAcc = v * v * d2yVal;
+        let compFactor = 0;
+        if (vertAcc > 0.55) {
+          compFactor = Math.min(3.8, vertAcc * 0.70); // valle / compresión fuerte
+        } else if (d2yVal < -0.0008) {
+          // Cambio de rasante / cresta
+          compFactor = Math.min(2.2, Math.abs(d2yVal) * v * 16.0);
+        }
+
+        // Pisar pianos a alta velocidad (|d| cerca de HALF_W en curvas)
+        const absD = Math.abs(car.d || 0);
+        let kerbFactor = 0;
+        const isCorner = Math.abs(T.k ? T.k[sIdx] : 0) > 0.0025 || (T.zoneOf && T.zoneOf[sIdx] >= 0);
+        if (absD > 7.6 && (isCorner || absD > 8.4) && v > 62) {
+          kerbFactor = Math.min(3.6, (absD - 7.4) * 1.75 * (v / 65.0));
+        }
+
+        // Baches / micro-ondulaciones del asfalto
+        const sVal = car.s || 0;
+        const bumpWave = Math.sin(sVal * 0.33 + 1.4) * Math.cos(sVal * 0.77 + 0.8) + 0.45 * Math.sin(sVal * 1.63);
+        const bumpFactor = (bumpWave > 0.40 && v > 70) ? (bumpWave - 0.40) * 2.5 : 0;
+
+        // Dinámica de cabeceo (pitch)
+        const pitchFactor = car.pitch < -0.006 ? Math.min(1.8, Math.abs(car.pitch) * 75.0) : 0;
+
+        // Menos combustible = coche más bajo
+        const fuel = car.fuel ?? 50;
+        const fuelFactor = 1.0 + Math.max(0, (100 - fuel) / 100) * 0.55;
+
+        // Puntuación total de contacto
+        const scrapeScore = (aeroDownforce * (0.34 + compFactor + bumpFactor + pitchFactor) + kerbFactor * (v / 56.0)) * fuelFactor * wetFactor;
+
+        // Ráfagas a ritmo fijo: por encima de ~270 km/h, medio segundo de chispas cada 2 s (con un desfase por coche
+        // para que no salgan todos a la vez); además, una ráfaga extra en una compresión fuerte
+        st.cycle = (st.cycle ?? ci * 0.37) + dt;
+        const fast = v > 75 && wetFactor > 0.3;
+        if (!fast) st.cycle = Math.min(st.cycle, 1.5);        // al volver a ir rápido, sale enseguida
+        if (fast && st.cycle >= 2.0) { st.cycle = 0; st.burstTimer = 0.5; st.intensity = Math.min(3.5, Math.max(1, scrapeScore)); }
+        else if (compFactor > 1.5 && st.burstTimer <= 0 && st.cooldown <= 0 && v > 62) { st.burstTimer = 0.3; st.cooldown = 1.5; st.intensity = Math.min(3.5, Math.max(1, scrapeScore)); }
+
+        if (st.burstTimer > 0) {
+          const rate = (170 + st.intensity * 200) * dt;   // (más y más finas)
+          let count = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);
+          if (count > 0) {
+            emitSkidSparks(car, rootPos, rootQuat, count, st.intensity, isNight);
+          }
+        }
+      }
     }
 
     // -----------------------------------------------------------------------
@@ -757,15 +949,19 @@ export function buildFx(scene, T, sim, visuals, world) {
       const t = spkLife[i] / spkMaxLife[i];
       spkVel[i * 3 + 1] -= 22.0 * dt;
 
+      const drag = Math.pow(0.95, dt * 60);
+      spkVel[i * 3] *= drag;
+      spkVel[i * 3 + 2] *= drag;
+
       spkPos[i * 3] += spkVel[i * 3] * dt;
       spkPos[i * 3 + 1] += spkVel[i * 3 + 1] * dt;
       spkPos[i * 3 + 2] += spkVel[i * 3 + 2] * dt;
 
       if (spkPos[i * 3 + 1] <= spkGroundY[i] + 0.02) {
         spkPos[i * 3 + 1] = spkGroundY[i] + 0.02;
-        spkVel[i * 3 + 1] = -spkVel[i * 3 + 1] * 0.45;
-        spkVel[i * 3] *= 0.7;
-        spkVel[i * 3 + 2] *= 0.7;
+        spkVel[i * 3 + 1] = -spkVel[i * 3 + 1] * 0.42;
+        spkVel[i * 3] *= 0.74;
+        spkVel[i * 3 + 2] *= 0.74;
       }
 
       spkAlpha[i] = 1.0 - t * t;
@@ -775,6 +971,8 @@ export function buildFx(scene, T, sim, visuals, world) {
     if (spkLive > 0) {
       spkGeo.attributes.position.needsUpdate = true;
       spkGeo.attributes.aAlpha.needsUpdate = true;
+      spkGeo.attributes.aColor.needsUpdate = true;
+      spkGeo.attributes.aSize.needsUpdate = true;
     }
 
     // -----------------------------------------------------------------------
