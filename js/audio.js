@@ -1,24 +1,38 @@
-// Sistema de audio sintetizado Web Audio para F1 V6 Turbo Híbrido.
-// Sin archivos de audio externos. Todo sintetizado proceduralmente en tiempo real.
-// Incluye: armónicos ricos V6, turbo whine y wastegate, cortes y golpes de marcha,
-// petardeo suave al soltar gas, Doppler multivoz, chirrido de neumáticos, grava/pianos y ambiente.
+import { makeV6 } from './engineDSP.js';
+// Sistema de audio sintetizado Web Audio para F1 V6 Turbo Híbrido (Versión Definitiva).
+// Arquitectura física:
+// - Motor ICE V6: tren de pulsos de combustión con rugido de escape y grano mecánico real (AM-noise rasp),
+//   subgraves potentes de cigüeñal (50-180 Hz) y resonancias formantes de colectores (320, 840, 1900 Hz).
+// - Turbocharger & Gas Flow: silbido de turbina de alta frecuencia (3.5-5.2 kHz) y flujo de gases directo.
+// - ERS / MGU-K: inversor eléctrico de alta frecuencia (1.8-4.5 kHz) en aceleración y frenada regenerativa.
+// - Transmisión Seamless: microcortes de encendido (50 ms) con detonación explosiva (bang) instantánea en subidas,
+//   golpe de gas (blip) con ladrido grave en reducciones y petardeo continuo en retención.
+// - Acústica y Cámaras: Doppler físico EXCLUSIVO en planos fijos de pista (Doppler=1.0 en cockpit, chase y dron),
+//   suavizado continuo de distancia para evitar saltos de ganancia, y reverberación convolutiva de circuito.
 
 export class EngineAudio {
   constructor() {
     this.on = false;
     this.ctx = null;
+    this.prevCar = null;
     this.prevGear = 1;
     this.prevThrottle = 0;
     this.shiftCutUntil = 0;
     this.downshiftBlipUntil = 0;
     this.lastCrackleTime = 0;
+    this.smoothedDist = null;
   }
 
-  _makeDistortionCurve(k = 1.2) {
-    const n = 512, curve = new Float32Array(n);
+  _makeDistortionCurve(k = 2.0) {
+    const n = 1024;
+    const curve = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const x = (i * 2) / n - 1;
-      curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+      if (x < 0) {
+        curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+      } else {
+        curve[i] = Math.tanh(x * 2.2) * 0.96;
+      }
     }
     return curve;
   }
@@ -46,21 +60,54 @@ export class EngineAudio {
     return buf;
   }
 
-  _makeV6PeriodicWave(ctx) {
-    const n = 24;
+  _makeCircuitReverbBuffer(ctx, duration = 0.90, decay = 2.8) {
+    const sampleRate = ctx.sampleRate;
+    const length = Math.floor(sampleRate * duration);
+    const buf = ctx.createBuffer(2, length, sampleRate);
+    const left = buf.getChannelData(0);
+    const right = buf.getChannelData(1);
+
+    const reflections = [
+      { time: 0.015, leftAmp: 0.45, rightAmp: 0.24 },
+      { time: 0.032, leftAmp: 0.30, rightAmp: 0.42 },
+      { time: 0.055, leftAmp: 0.36, rightAmp: 0.28 },
+      { time: 0.085, leftAmp: 0.24, rightAmp: 0.32 },
+      { time: 0.120, leftAmp: 0.20, rightAmp: 0.20 }
+    ];
+
+    for (const r of reflections) {
+      const idx = Math.floor(r.time * sampleRate);
+      if (idx < length) {
+        left[idx] += r.leftAmp;
+        right[idx] += r.rightAmp;
+      }
+    }
+
+    let filterL = 0, filterR = 0;
+    for (let i = 0; i < length; i++) {
+      const t = i / sampleRate;
+      const env = Math.exp(-t * decay);
+      const whiteL = (Math.random() * 2 - 1) * env * 0.25;
+      const whiteR = (Math.random() * 2 - 1) * env * 0.25;
+      filterL = 0.65 * filterL + 0.35 * whiteL;
+      filterR = 0.65 * filterR + 0.35 * whiteR;
+      left[i] += filterL;
+      right[i] += filterR;
+    }
+
+    return buf;
+  }
+
+  _makeF1ExhaustWave(ctx) {
+    const n = 64;
     const real = new Float32Array(n);
     const imag = new Float32Array(n);
-    // Armónicos del V6: fundamental, 2º armónico fuerte, orden 3, 4, 6, 8 con presencia metálica
-    imag[1] = 1.0;
-    imag[2] = 0.80;
-    imag[3] = 0.60;
-    imag[4] = 0.45;
-    imag[5] = 0.32;
-    imag[6] = 0.25;
-    imag[7] = 0.18;
-    imag[8] = 0.14;
-    imag[10] = 0.09;
-    imag[12] = 0.06;
+    for (let k = 1; k < n; k++) {
+      const decay = 1 / Math.pow(k, 0.70);
+      const harmonicColor = (k % 2 === 1) ? 1.0 : 0.85;
+      imag[k] = decay * harmonicColor * Math.sin(k * 0.35);
+      real[k] = decay * harmonicColor * Math.cos(k * 0.35) * 0.45;
+    }
     return ctx.createPeriodicWave(real, imag, { disableNormalization: false });
   }
 
@@ -74,64 +121,118 @@ export class EngineAudio {
     if (!AC) return;
     const ctx = this.ctx = new AC();
 
-    // Bus Master y Compresor / Limitador
+    // Bus Master y Compresor de salida
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -16;
-    comp.knee.value = 6;
-    comp.ratio.value = 3.5;
-    comp.attack.value = 0.003;
-    comp.release.value = 0.12;
+    comp.threshold.value = -10;
+    comp.knee.value = 3;
+    comp.ratio.value = 2.5;
+    comp.attack.value = 0.002;
+    comp.release.value = 0.06;
     comp.connect(ctx.destination);
 
     const master = this.master = ctx.createGain();
-    master.gain.value = 0;
+    master.gain.value = 0.32;
     master.connect(comp);
+
+    // ==========================================
+    // REVERBERACIÓN CONVOLUTIVA DE CIRCUITO
+    // ==========================================
+    const convolver = this.convolver = ctx.createConvolver();
+    convolver.buffer = this._makeCircuitReverbBuffer(ctx, 0.90, 2.8);
+
+    const reverbLP = ctx.createBiquadFilter();
+    reverbLP.type = 'lowpass';
+    reverbLP.frequency.value = 4800;
+
+    const reverbGain = this.reverbGain = ctx.createGain();
+    reverbGain.gain.value = 0;
+
+    convolver.connect(reverbLP);
+    reverbLP.connect(reverbGain);
+    reverbGain.connect(master);
 
     const whiteBuf = this._makeNoiseBuffer(ctx, 2.0, false);
     const pinkBuf = this._makeNoiseBuffer(ctx, 2.0, true);
 
     // ==========================================
-    // 1. MOTOR DEL COCHE ENFOCADO (Focus Car Engine)
+    // 1. CAPA SUBGRAVE / PEGADA DE CIGÜEÑAL (50-200 Hz)
+    // ==========================================
+    const subBassGain = this.subBassGain = ctx.createGain();
+    subBassGain.gain.value = 0.48;
+
+    const subOsc1 = this.subOsc1 = ctx.createOscillator();
+    subOsc1.type = 'triangle';
+    subOsc1.connect(subBassGain);
+    subOsc1.start();
+
+    const subOsc2 = this.subOsc2 = ctx.createOscillator();
+    subOsc2.type = 'sawtooth';
+    const subOsc2Gain = ctx.createGain();
+    subOsc2Gain.gain.value = 0.35;
+    subOsc2.connect(subOsc2Gain);
+    subOsc2Gain.connect(subBassGain);
+    subOsc2.start();
+
+    const subLowpass = ctx.createBiquadFilter();
+    subLowpass.type = 'lowpass';
+    subLowpass.frequency.value = 280;
+    subLowpass.Q.value = 1.4;
+    subBassGain.connect(subLowpass);
+    subLowpass.connect(master);
+
+    // ==========================================
+    // 2. MOTOR ICE V6 (Combustión, Escape, Resonancias)
     // ==========================================
     const engineGain = this.engineGain = ctx.createGain();
-    engineGain.gain.value = 0.32;
+    engineGain.gain.value = 0.42;
 
     const enginePanner = this.enginePanner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
 
     const engineAirFilter = this.engineAirFilter = ctx.createBiquadFilter();
     engineAirFilter.type = 'lowpass';
-    engineAirFilter.frequency.value = 8000;
+    engineAirFilter.frequency.value = 10000;
     engineAirFilter.Q.value = 0.5;
 
     const engineShaper = ctx.createWaveShaper();
-    engineShaper.curve = this._makeDistortionCurve(1.2);
+    engineShaper.curve = this._makeDistortionCurve(2.0);
     engineShaper.oversample = '2x';
 
-    // Filtro de seguimiento del acelerador
     const engineLP = this.engineLP = ctx.createBiquadFilter();
     engineLP.type = 'lowpass';
-    engineLP.frequency.value = 4500;
-    engineLP.Q.value = 0.7;
+    engineLP.frequency.value = 5800;
+    engineLP.Q.value = 0.9;
 
-    // Resonancia de escape / colectores (~1350 Hz)
-    const enginePeak = this.enginePeak = ctx.createBiquadFilter();
-    enginePeak.type = 'peaking';
-    enginePeak.frequency.value = 1350;
-    enginePeak.Q.value = 1.8;
-    enginePeak.gain.value = 4.5;
+    // Resonancias formantes del sistema de escape V6
+    const engineLowShelf = this.engineLowShelf = ctx.createBiquadFilter();
+    engineLowShelf.type = 'lowshelf';
+    engineLowShelf.frequency.value = 180;
+    engineLowShelf.gain.value = 8.0;
 
-    // Resonancia de admisión (~2400 Hz)
-    const engineIntake = this.engineIntake = ctx.createBiquadFilter();
-    engineIntake.type = 'peaking';
-    engineIntake.frequency.value = 2400;
-    engineIntake.Q.value = 2.0;
-    engineIntake.gain.value = 3.0;
+    const enginePeakLow = this.enginePeakLow = ctx.createBiquadFilter();
+    enginePeakLow.type = 'peaking';
+    enginePeakLow.frequency.value = 320;
+    enginePeakLow.Q.value = 2.2;
+    enginePeakLow.gain.value = 6.0;
 
-    // Cadena de procesado del motor
-    enginePeak.connect(engineIntake);
-    engineIntake.connect(engineLP);
+    const enginePeakMid = this.enginePeakMid = ctx.createBiquadFilter();
+    enginePeakMid.type = 'peaking';
+    enginePeakMid.frequency.value = 840;
+    enginePeakMid.Q.value = 1.8;
+    enginePeakMid.gain.value = 5.5;
+
+    const enginePeakHigh = this.enginePeakHigh = ctx.createBiquadFilter();
+    enginePeakHigh.type = 'peaking';
+    enginePeakHigh.frequency.value = 1900;
+    enginePeakHigh.Q.value = 2.2;
+    enginePeakHigh.gain.value = 4.8;
+
+    engineLowShelf.connect(enginePeakLow);
+    enginePeakLow.connect(enginePeakMid);
+    enginePeakMid.connect(enginePeakHigh);
+    enginePeakHigh.connect(engineLP);
     engineLP.connect(engineShaper);
     engineShaper.connect(engineAirFilter);
+
     if (enginePanner) {
       engineAirFilter.connect(enginePanner);
       enginePanner.connect(engineGain);
@@ -139,33 +240,77 @@ export class EngineAudio {
       engineAirFilter.connect(engineGain);
     }
     engineGain.connect(master);
+    engineGain.connect(convolver);
 
-    // Banco de órdenes armónicos del V6 Turbo Híbrido (3 detonaciones por revolución)
-    const v6Wave = this._makeV6PeriodicWave(ctx);
+    // Textura mecánica de combustión (AM noise rasp)
+    const raspNoise = ctx.createBufferSource();
+    raspNoise.buffer = pinkBuf;
+    raspNoise.loop = true;
+    const raspFilter = ctx.createBiquadFilter();
+    raspFilter.type = 'bandpass';
+    raspFilter.frequency.value = 1400;
+    raspFilter.Q.value = 2.0;
+    const raspGain = this.raspGain = ctx.createGain();
+    raspGain.gain.value = 0.08;
+    raspNoise.connect(raspFilter);
+    raspFilter.connect(raspGain);
+    raspGain.connect(engineLowShelf);
+    raspNoise.start();
+
+    // Osciladores armónicos de combustión V6
+    const exhaustWave = this._makeF1ExhaustWave(ctx);
     const harmConfigs = [
-      { mult: 0.5, amp: 0.22, type: 'triangle' }, // Orden 1.5: subarmónico de bancada / cigüeñal
-      { mult: 1.0, amp: 0.38, customWave: v6Wave }, // Orden 3.0: fundamental de encendido V6
-      { mult: 1.5, amp: 0.28, type: 'sawtooth' }, // Orden 4.5: asimetría acústica V6
-      { mult: 2.0, amp: 0.35, customWave: v6Wave }, // Orden 6.0: 2º armónico de combustión (rugido)
-      { mult: 2.5, amp: 0.24, type: 'sawtooth' }, // Orden 7.5: textura intermedia
-      { mult: 3.0, amp: 0.26, type: 'sawtooth' }, // Orden 9.0: 3º armónico (mordida aguda)
-      { mult: 4.0, amp: 0.20, type: 'sawtooth' }, // Orden 12.0: 4º armónico (chillido metálico)
-      { mult: 5.0, amp: 0.14, type: 'sawtooth' }  // Orden 15.0: presencia de altas RPM
+      { mult: 0.5000, amp: 0.45, type: 'sawtooth' }, // 1.5X asimetría bancadas
+      { mult: 1.0000, amp: 0.70, customWave: exhaustWave }, // 3.0X FUNDAMENTAL DE ENCENDIDO V6
+      { mult: 1.5000, amp: 0.45, type: 'sawtooth' }, // 4.5X rugido áspero
+      { mult: 2.0000, amp: 0.55, customWave: exhaustWave }, // 6.0X 2º armónico de combustión
+      { mult: 3.0000, amp: 0.38, type: 'sawtooth' }, // 9.0X mordida metálica
+      { mult: 4.0000, amp: 0.24, type: 'sawtooth' }  // 12.0X chillido en altas
     ];
 
     this.harmonics = harmConfigs.map((cfg) => {
       const o = ctx.createOscillator();
       if (cfg.customWave) o.setPeriodicWave(cfg.customWave);
       else o.type = cfg.type;
+
       const g = ctx.createGain();
       g.gain.value = cfg.amp;
       o.connect(g);
-      g.connect(enginePeak);
+      g.connect(engineLowShelf);
       o.start();
       return { o, mult: cfg.mult, g, amp: cfg.amp };
     });
 
-    // Modulación de grano / vibración mecánica (LFO a frecuencia de giro del motor)
+    // motor por explosiones (engineDSP.js) en un AudioWorklet: cuando está listo sustituye a los osciladores y al
+    // subgrave (que sonaban a sintetizador); va directo al filtro de aire, sin la EQ ni la saturación de los osciladores
+    const useV6 = (node, P) => {
+      if (this.v6) return;
+      this.v6 = P;
+      const g = this.v6Gain = ctx.createGain(); g.gain.value = 1.1;
+      node.connect(g).connect(engineAirFilter);
+      for (const h of this.harmonics) { h.g.gain.value = 0; }
+      this.subBassGain.gain.value = 0; this.raspGain.gain.value = 0;
+    };
+    // si el AudioWorklet no arranca (en algunos Chrome addModule no termina nunca), el mismo motor en el hilo principal
+    const fallback = () => {
+      if (this.v6 || !ctx.createScriptProcessor) return;
+      const sp = ctx.createScriptProcessor(1024, 0, 1), gen = makeV6(ctx.sampleRate, 7);
+      const P = { rpm: 5000, load: 0, cut: 0, _sp: sp };
+      sp.onaudioprocess = (e) => { const o = e.outputBuffer.getChannelData(0); gen(o, o.length, P.rpm, P.load, P.cut); };
+      useV6(sp, P);
+    };
+    if (ctx.audioWorklet) {
+      ctx.audioWorklet.addModule(new URL('./v6worklet.js', import.meta.url)).then(() => {
+        if (this.v6) return;
+        const node = new AudioWorkletNode(ctx, 'v6', { outputChannelCount: [1] });
+        const pr = node.parameters, P = { node };
+        for (const k of ['rpm', 'load', 'cut']) Object.defineProperty(P, k, { set: (v) => pr.get(k).setTargetAtTime(v, ctx.currentTime, k === 'cut' ? 0.001 : 0.012) });
+        useV6(node, P);
+      }).catch((e) => { console.warn('motor: sin AudioWorklet', e); fallback(); });
+    }
+    setTimeout(fallback, 1500);
+
+    // Grano / vibración periódica mecánica
     const lfo = this.grainLFO = ctx.createOscillator();
     lfo.type = 'sine';
     const lfoGain = ctx.createGain();
@@ -175,23 +320,37 @@ export class EngineAudio {
     lfo.start();
 
     // ==========================================
-    // 2. TURBOCHARGER (Whine y Wastegate)
+    // 3. TURBOCHARGER, AIRE Y ERS (HÍBRIDO F1)
     // ==========================================
-    // Silbido del turbo (whine de alta frecuencia ~2.8 - 5.5 kHz)
+    // Silbido de turbina de turbo (3.4 - 5.5 kHz) directo al master
     const turboOsc = this.turboOsc = ctx.createOscillator();
     turboOsc.type = 'sine';
     const turboFilter = ctx.createBiquadFilter();
     turboFilter.type = 'bandpass';
-    turboFilter.frequency.value = 3600;
-    turboFilter.Q.value = 1.4;
+    turboFilter.frequency.value = 4000;
+    turboFilter.Q.value = 3.2;
     const turboGain = this.turboGain = ctx.createGain();
     turboGain.gain.value = 0;
     turboOsc.connect(turboFilter);
     turboFilter.connect(turboGain);
-    turboGain.connect(engineAirFilter);
+    turboGain.connect(master);
     turboOsc.start();
 
-    // Descarga de turbo (blow-off / wastegate hiss al soltar acelerador)
+    // Soplado de gas de escape / turbo hiss directo
+    const blowNoise = ctx.createBufferSource();
+    blowNoise.buffer = pinkBuf;
+    blowNoise.loop = true;
+    const blowFilter = ctx.createBiquadFilter();
+    blowFilter.type = 'highpass';
+    blowFilter.frequency.value = 2400;
+    const blowGain = this.blowGain = ctx.createGain();
+    blowGain.gain.value = 0;
+    blowNoise.connect(blowFilter);
+    blowFilter.connect(blowGain);
+    blowGain.connect(master);
+    blowNoise.start();
+
+    // Wastegate hiss al soltar gas
     const wgNoise = ctx.createBufferSource();
     wgNoise.buffer = whiteBuf;
     wgNoise.loop = true;
@@ -203,49 +362,63 @@ export class EngineAudio {
     wgGain.gain.value = 0;
     wgNoise.connect(wgFilter);
     wgFilter.connect(wgGain);
-    wgGain.connect(engineAirFilter);
+    wgGain.connect(master);
     wgNoise.start();
 
-    // Transitorios de cambio de marcha y petardeo (pops de escape)
+    // Inversor eléctrico ERS / MGU-K (1.8 - 4.5 kHz)
+    const ersOsc = this.ersOsc = ctx.createOscillator();
+    ersOsc.type = 'sine';
+    const ersFilter = ctx.createBiquadFilter();
+    ersFilter.type = 'bandpass';
+    ersFilter.frequency.value = 2800;
+    ersFilter.Q.value = 3.5;
+    const ersGain = this.ersGain = ctx.createGain();
+    ersGain.gain.value = 0;
+    ersOsc.connect(ersFilter);
+    ersFilter.connect(ersGain);
+    ersGain.connect(master);
+    ersOsc.start();
+
+    // ==========================================
+    // 4. TRANSICIONES SEAMLESS (Pops, Bangs, Thump)
+    // ==========================================
+    // Detonación / crack agudo de cambio de marcha (upshift pop)
     const popNoise = ctx.createBufferSource();
     popNoise.buffer = whiteBuf;
     popNoise.loop = true;
     const popFilter = ctx.createBiquadFilter();
     popFilter.type = 'bandpass';
-    popFilter.frequency.value = 1300;
-    popFilter.Q.value = 2.4;
+    popFilter.frequency.value = 1600;
+    popFilter.Q.value = 1.8;
     const popGain = this.crackleGain = ctx.createGain();
     popGain.gain.value = 0;
     popNoise.connect(popFilter);
     popFilter.connect(popGain);
-    popGain.connect(engineAirFilter);
+    popGain.connect(master);
+    popGain.connect(convolver);
     popNoise.start();
 
-    // Golpe sordo de escape en reducciones (downshift thud)
-    const thudNoise = ctx.createBufferSource();
-    thudNoise.buffer = pinkBuf;
-    thudNoise.loop = true;
-    const thudFilter = ctx.createBiquadFilter();
-    thudFilter.type = 'bandpass';
-    thudFilter.frequency.value = 450;
-    thudFilter.Q.value = 2.0;
+    // Thump grave de combustión / corte (120 Hz)
+    const thudOsc = this.thudOsc = ctx.createOscillator();
+    thudOsc.type = 'sine';
+    thudOsc.frequency.value = 120;
     const thudGain = this.thudGain = ctx.createGain();
     thudGain.gain.value = 0;
-    thudNoise.connect(thudFilter);
-    thudFilter.connect(thudGain);
-    thudGain.connect(engineAirFilter);
-    thudNoise.start();
+    thudOsc.connect(thudGain);
+    thudGain.connect(master);
+    thudGain.connect(convolver);
+    thudOsc.start();
 
     // ==========================================
-    // 3. VOCES SECUNDARIAS (Doppler en exteriores)
+    // 5. VOCES SECUNDARIAS (Rivales con Doppler)
     // ==========================================
     this.secondaryVoices = [];
     for (let i = 0; i < 3; i++) {
       const osc = ctx.createOscillator();
-      osc.setPeriodicWave(v6Wave);
+      osc.setPeriodicWave(exhaustWave);
       const lp = ctx.createBiquadFilter();
       lp.type = 'lowpass';
-      lp.frequency.value = 3000;
+      lp.frequency.value = 3800;
       lp.Q.value = 0.7;
       const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
       const g = ctx.createGain();
@@ -259,25 +432,41 @@ export class EngineAudio {
         lp.connect(g);
       }
       g.connect(master);
+      g.connect(convolver);
       osc.start();
       this.secondaryVoices.push({ osc, lp, pan, gain: g });
     }
 
     // ==========================================
-    // 4. NEUMÁTICOS, SUPERFICIE Y GRAVA
+    // 6. NEUMÁTICOS, RODAJE, GRAVA Y AMBIENTE
     // ==========================================
-    // Chirrido de neumáticos (derrape / bloqueo de frenos)
+    // Ruido de rodadura
+    const rollNoise = ctx.createBufferSource();
+    rollNoise.buffer = pinkBuf;
+    rollNoise.loop = true;
+    const rollFilter = ctx.createBiquadFilter();
+    rollFilter.type = 'bandpass';
+    rollFilter.frequency.value = 380;
+    rollFilter.Q.value = 1.2;
+    const rollGain = this.rollGain = ctx.createGain();
+    rollGain.gain.value = 0;
+    rollNoise.connect(rollFilter);
+    rollFilter.connect(rollGain);
+    rollGain.connect(master);
+    rollNoise.start();
+
+    // Chirrido de neumáticos
     const screechNoise = ctx.createBufferSource();
     screechNoise.buffer = whiteBuf;
     screechNoise.loop = true;
     const screechFilter1 = ctx.createBiquadFilter();
     screechFilter1.type = 'bandpass';
     screechFilter1.frequency.value = 980;
-    screechFilter1.Q.value = 5.0;
+    screechFilter1.Q.value = 4.8;
     const screechFilter2 = ctx.createBiquadFilter();
     screechFilter2.type = 'bandpass';
-    screechFilter2.frequency.value = 1480;
-    screechFilter2.Q.value = 5.5;
+    screechFilter2.frequency.value = 1520;
+    screechFilter2.Q.value = 5.0;
     const screechGain = this.screechGain = ctx.createGain();
     screechGain.gain.value = 0;
     screechNoise.connect(screechFilter1);
@@ -287,7 +476,7 @@ export class EngineAudio {
     screechGain.connect(master);
     screechNoise.start();
 
-    // Superficie / grava / hierba al salirse de pista (|d| > ~6.8)
+    // Grava / hierba
     const gravelNoise = ctx.createBufferSource();
     gravelNoise.buffer = pinkBuf;
     gravelNoise.loop = true;
@@ -302,9 +491,6 @@ export class EngineAudio {
     gravelGain.connect(master);
     gravelNoise.start();
 
-    // ==========================================
-    // 5. AMBIENTE (Viento, Público, Lluvia)
-    // ==========================================
     // Viento
     const windNoise = ctx.createBufferSource();
     windNoise.buffer = pinkBuf;
@@ -319,7 +505,7 @@ export class EngineAudio {
     windGain.connect(master);
     windNoise.start();
 
-    // Público lejano (murmullo / ambiente suave de gradas)
+    // Público
     const crowdNoise = ctx.createBufferSource();
     crowdNoise.buffer = pinkBuf;
     crowdNoise.loop = true;
@@ -387,7 +573,7 @@ export class EngineAudio {
 
     const vRad = vx * dirX + vz * dirZ;
     const c = 343;
-    const clampedVRad = Math.max(-110, Math.min(110, vRad));
+    const clampedVRad = Math.max(-105, Math.min(105, vRad));
     const doppler = c / (c - clampedVRad);
 
     let pan = 0;
@@ -424,6 +610,10 @@ export class EngineAudio {
       dist = camObjOrDist;
     }
 
+    // Suavizado continuo de distancia para eliminar saltos bruscos en cambios de cámara
+    if (this.smoothedDist == null) this.smoothedDist = dist;
+    else this.smoothedDist += (dist - this.smoothedDist) * 0.08;
+
     const rainVal = sim?.wx?.rain ?? (typeof speed === 'number' && typeof visuals === 'undefined' ? (arguments[4] || 0) : 0);
     const simSpeed = typeof speed === 'number' ? speed : 1;
 
@@ -444,33 +634,72 @@ export class EngineAudio {
     this.windGain.gain.setTargetAtTime(windVol, t, 0.1);
     this.windFilter.frequency.setTargetAtTime(windCutoff, t, 0.15);
 
-    // 2. Volumen Master
-    let masterVol = onboard ? 0.30 : cam === 'chase' ? 0.24 : 0.22 * Math.min(1, 40 / Math.max(7, dist));
+    // Ruido de rodadura
+    const rollVol = isMuted ? 0 : Math.min(0.06, (carSpeed / 100) * 0.05);
+    this.rollGain.gain.setTargetAtTime(rollVol, t, 0.1);
+
+    // 2. Volumen Master suave y sin saltos (>0.3 s)
+    const distAtten = Math.max(0.45, 1 / (1 + this.smoothedDist * 0.008));
+    let masterVol = onboard
+      ? 0.35
+      : cam === 'chase'
+        ? 0.32
+        : cam === 'heli'
+          ? 0.28
+          : 0.30 * distAtten;
+
     if (isMuted) masterVol = 0;
-    this.master.gain.setTargetAtTime(masterVol, t, 0.08);
+    this.master.gain.setTargetAtTime(masterVol, t, 0.25);
+
+    // Reverberación de circuito (seca en cabina, espaciosa en planos exteriores)
+    const reverbVol = isMuted || onboard ? 0 : (cam === 'track' ? 0.35 : cam === 'heli' ? 0.36 : 0.16);
+    this.reverbGain.gain.setTargetAtTime(reverbVol, t, 0.25);
 
     if (!car) return;
 
     // ==========================================
-    // 3. CAMBIOS DE MARCHA, DESCARGA Y PETARDEO
+    // 3. CAMBIOS DE MARCHA DISCRETOS Y DETONACIONES
     // ==========================================
     const curGear = car.gear ?? 1;
     const curThrottle = car.throttle ?? 0;
     const curBrake = car.brake ?? 0;
+    let gearChanged = false;
 
-    if (this.prevGear !== curGear && carSpeed > 8) {
+    // Reiniciar marcha previa si cambia el coche enfocado
+    if (this.prevCar !== car) {
+      this.prevCar = car;
+      this.prevGear = curGear;
+    }
+
+    if (this.prevGear !== curGear && carSpeed > 6) {
+      gearChanged = true;
       if (curGear > this.prevGear) {
-        // Subida de marcha: corte rápido de encendido + pop seco (35 ms)
-        this.shiftCutUntil = t + 0.038;
+        // Subida de marcha: microcorte de encendido (50 ms) + bang explosivo de escape + thump grave
+        this.shiftCutUntil = t + 0.050;
+        this.engineGain.gain.cancelScheduledValues(t);
+        this.engineGain.gain.setValueAtTime(0.001, t);
+        this.engineGain.gain.setValueAtTime(0.001, t + 0.045);
+        this.engineGain.gain.setTargetAtTime(0.42 + curThrottle * 0.35, t + 0.050, 0.010);
+
+        // Detonación seca y potente de escape
         this.crackleGain.gain.cancelScheduledValues(t);
-        this.crackleGain.gain.setValueAtTime(0.12, t);
+        this.crackleGain.gain.setValueAtTime(0.85, t);
         this.crackleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.035);
-      } else if (curGear < this.prevGear) {
-        // Reducción: golpe/blip de revoluciones + golpe sordo de escape (70 ms)
-        this.downshiftBlipUntil = t + 0.075;
+
+        // Thump grave de par motor (120 Hz)
         this.thudGain.gain.cancelScheduledValues(t);
-        this.thudGain.gain.setValueAtTime(0.18, t);
-        this.thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.065);
+        this.thudGain.gain.setValueAtTime(0.75, t);
+        this.thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.048);
+      } else if (curGear < this.prevGear) {
+        // Reducción: golpe/blip de revoluciones + ladrido grave de escape
+        this.downshiftBlipUntil = t + 0.085;
+        this.thudGain.gain.cancelScheduledValues(t);
+        this.thudGain.gain.setValueAtTime(0.80, t);
+        this.thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.080);
+
+        this.crackleGain.gain.cancelScheduledValues(t);
+        this.crackleGain.gain.setValueAtTime(0.45, t);
+        this.crackleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.050);
       }
       this.prevGear = curGear;
     }
@@ -478,31 +707,33 @@ export class EngineAudio {
     const inShiftCut = t < this.shiftCutUntil;
     const inDownshiftBlip = t < this.downshiftBlipUntil;
 
-    // Descarga de turbo (wastegate)
-    if (this.prevThrottle > 0.60 && curThrottle < 0.22 && carSpeed > 15) {
+    // Wastegate al soltar acelerador bruscamente
+    if (this.prevThrottle > 0.55 && curThrottle < 0.20 && carSpeed > 15) {
       this.wastegateGain.gain.cancelScheduledValues(t);
-      this.wastegateGain.gain.setValueAtTime(0.08, t);
-      this.wastegateGain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      this.wastegateGain.gain.setValueAtTime(0.22, t);
+      this.wastegateGain.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
     }
     this.prevThrottle = curThrottle;
 
-    // Petardeo suave en retención (overrun crackle / pops)
-    if (curThrottle < 0.18 && (car.rpm || 0) > 7500 && carSpeed > 15 && !inShiftCut) {
-      if (t - this.lastCrackleTime > 0.045 + Math.random() * 0.04) {
+    // Petardeo continuo en retención a altas RPM
+    if (curThrottle < 0.18 && (car.rpm || 0) > 7200 && carSpeed > 15 && !inShiftCut) {
+      if (t - this.lastCrackleTime > 0.035 + Math.random() * 0.040) {
         this.lastCrackleTime = t;
-        const popIntensity = 0.06 + Math.random() * 0.08;
+        const popIntensity = 0.15 + Math.random() * 0.22;
         this.crackleGain.gain.cancelScheduledValues(t);
         this.crackleGain.gain.setValueAtTime(popIntensity, t);
-        this.crackleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.025);
+        this.crackleGain.gain.exponentialRampToValueAtTime(0.001, t + 0.024);
       }
     }
 
     // ==========================================
-    // 4. MOTOR PRINCIPAL: ARMÓNICOS Y DOPPLER
+    // 4. MOTOR PRINCIPAL: CÁLCULO DE FRECUENCIAS Y DOPPLER
     // ==========================================
+    // Doppler SOLO aplica a planos fijos de pista (cámaras exteriores estáticas)
+    // En cockpit, chase o dron la cámara se desplaza con el monoplaza (Doppler = 1.0)
     let focusDoppler = 1.0;
     let focusPan = 0;
-    if (!onboard && camPos && focusPos) {
+    if (cam === 'track' && camPos && focusPos) {
       const focusVis = visuals ? visuals[car.i] : null;
       const rotY = focusVis?.root?.rotation?.y ?? 0;
       const res = this._calcDopplerAndPan(car, focusPos, rotY, camPos, camRight);
@@ -514,44 +745,85 @@ export class EngineAudio {
       this.enginePanner.pan.setTargetAtTime(onboard ? 0 : focusPan, t, 0.05);
     }
 
-    let effRpm = Math.max(4800, car.rpm || 4800) * (carSpeed < 0.5 ? 0.7 : 1);
-    if (inDownshiftBlip) effRpm = Math.min(12500, effRpm + 1900);
+    let effRpm = Math.max(4800, car.rpm || 4800) * (carSpeed < 0.5 ? 0.75 : 1);
+    if (inDownshiftBlip) effRpm = Math.min(12500, effRpm + 2600);
 
-    // Frecuencia base de encendido (3 detonaciones por revolución)
-    const firingFreq = (effRpm / 60) * 3.0 * focusDoppler;
+    const crankFreq = (effRpm / 60) * focusDoppler;
+    const firingFreq = crankFreq * 3.0; // 3 detonaciones por revolución
 
-    // Actualización dinámica de armónicos
+    // Capa Subgraves (50-200 Hz): pegada física de cigüeñal
+    if (gearChanged) {
+      this.subOsc1.frequency.cancelScheduledValues(t);
+      this.subOsc1.frequency.setValueAtTime(crankFreq, t);
+      this.subOsc2.frequency.cancelScheduledValues(t);
+      this.subOsc2.frequency.setValueAtTime(crankFreq * 0.5, t);
+    } else {
+      this.subOsc1.frequency.setTargetAtTime(crankFreq, t, 0.008);
+      this.subOsc2.frequency.setTargetAtTime(crankFreq * 0.5, t, 0.008);
+    }
+    const flybyBassBoost = (cam === 'track' && dist < 28 && carSpeed > 20) ? 8.0 : 0;
+    this.subBassGain.gain.setTargetAtTime(this.v6 ? 0 : 0.48 + (flybyBassBoost > 0 ? 0.30 : 0), t, 0.04);
+
+    // Actualización de osciladores armónicos:
+    // Salto instantáneo sin rampa en cambios de marcha
     for (const h of this.harmonics) {
-      h.o.frequency.setTargetAtTime(firingFreq * h.mult, t, 0.035);
-      const dynGain = h.amp * (h.mult >= 2.0 ? 0.50 + curThrottle * 0.90 : 0.75 + curThrottle * 0.45);
-      h.g.gain.setTargetAtTime(dynGain, t, 0.05);
+      const targetF = firingFreq * h.mult;
+      if (gearChanged) {
+        h.o.frequency.cancelScheduledValues(t);
+        h.o.frequency.setValueAtTime(targetF, t);
+      } else {
+        h.o.frequency.setTargetAtTime(targetF, t, 0.008);
+      }
+
+      const dynGain = h.amp * (h.mult >= 1.5 ? 0.65 + curThrottle * 0.75 : 0.85 + curThrottle * 0.35);
+      h.g.gain.setTargetAtTime(this.v6 ? 0 : dynGain, t, 0.03);
     }
 
     // Grano mecánico
-    this.grainLFO.frequency.setTargetAtTime((effRpm / 60) * focusDoppler, t, 0.04);
+    this.grainLFO.frequency.setTargetAtTime(crankFreq, t, 0.02);
 
-    // Filtros de timbre
+    // Textura mecánica de raspado
+    this.raspGain.gain.setTargetAtTime(this.v6 ? 0 : 0.06 + curThrottle * 0.12, t, 0.04);
+    if (this.v6) {
+      const P = this.v6;
+      P.rpm = effRpm * focusDoppler; P.load = inShiftCut ? 0 : curThrottle; P.cut = inShiftCut ? 1 : 0;
+    }
+
+    // EQ y resonancias formantes
+    this.engineLowShelf.gain.setTargetAtTime(8.0 + flybyBassBoost + (1 - curThrottle) * 2.0, t, 0.04);
+
     const lpFreq = onboard
-      ? 2800 + curThrottle * 4700
-      : Math.max(1100, (1600 + curThrottle * 2600) - dist * 10);
-    this.engineLP.frequency.setTargetAtTime(lpFreq, t, 0.06);
+      ? 3000 + curThrottle * 6500
+      : Math.max(2200, (2400 + curThrottle * 4200) - this.smoothedDist * 2);
+    this.engineLP.frequency.setTargetAtTime(lpFreq, t, 0.04);
 
-    const airFreq = onboard ? 8500 : Math.max(1400, 7500 - dist * 22);
-    this.engineAirFilter.frequency.setTargetAtTime(airFreq, t, 0.08);
+    const airFreq = onboard ? 10000 : Math.max(2800, 9200 - this.smoothedDist * 6);
+    this.engineAirFilter.frequency.setTargetAtTime(airFreq, t, 0.04);
 
-    // Turbocharger Whine
-    const turboFreq = 2600 + (effRpm - 4800) * 0.30 + curThrottle * 1400;
-    this.turboOsc.frequency.setTargetAtTime(turboFreq * (onboard ? 1 : focusDoppler), t, 0.06);
-    const turboVol = (0.008 + 0.042 * Math.pow(curThrottle, 1.6)) * (onboard ? 1.0 : 0.65);
-    this.turboGain.gain.setTargetAtTime(turboVol, t, 0.08);
+    // Silbido de Turbocharger y Soplado directo de aire (brillo F1)
+    const turboFreq = 3400 + (effRpm - 4800) * 0.22 + curThrottle * 1600;
+    this.turboOsc.frequency.setTargetAtTime(turboFreq * (cam === 'track' ? focusDoppler : 1), t, 0.03);
+    const turboVol = (0.015 + 0.085 * Math.pow(curThrottle, 1.3)) * (onboard ? 1.0 : 0.85);
+    this.turboGain.gain.setTargetAtTime(turboVol, t, 0.04);
 
-    // Ganancia del cuerpo del motor (con corte en subida de marcha)
-    let bodyVol = 0.24 + curThrottle * 0.38;
-    if (inShiftCut) bodyVol *= 0.10;
-    this.engineGain.gain.setTargetAtTime(bodyVol, t, inShiftCut ? 0.005 : 0.06);
+    const blowVol = curThrottle * 0.085 * Math.min(1, carSpeed / 15);
+    this.blowGain.gain.setTargetAtTime(blowVol, t, 0.04);
+
+    // ERS / MGU-K Inverter Whine
+    const ersFreq = 1800 + carSpeed * 28;
+    this.ersOsc.frequency.setTargetAtTime(ersFreq, t, 0.03);
+    const isErsActive = (curThrottle > 0.4 || curBrake > 0.3) && carSpeed > 10;
+    const ersVol = isErsActive ? (curThrottle > 0.4 ? 0.065 : 0.085) : 0;
+    this.ersGain.gain.setTargetAtTime(ersVol, t, 0.05);
+
+    // Ganancia continua del motor (salvo corte de encendido explícito)
+    if (!inShiftCut) {
+      const bodyVol = 0.38 + curThrottle * 0.42;
+      this.engineGain.gain.setTargetAtTime(bodyVol, t, 0.04);
+    }
 
     // ==========================================
-    // 5. VOCES SECUNDARIAS (Doppler en exteriores)
+    // 5. VOCES SECUNDARIAS (Rivales con Doppler)
     // ==========================================
     if (!onboard && sim?.cars && visuals && camPos) {
       const candidates = [];
@@ -561,7 +833,7 @@ export class EngineAudio {
         if (!vis?.root?.position) continue;
         const oPos = vis.root.position;
         const d = Math.hypot(camPos.x - oPos.x, camPos.y - oPos.y, camPos.z - oPos.z);
-        if (d < 160) candidates.push({ car: otherCar, pos: oPos, rotY: vis.root.rotation.y, dist: d });
+        if (d < 180) candidates.push({ car: otherCar, pos: oPos, rotY: vis.root.rotation.y, dist: d });
       }
 
       candidates.sort((a, b) => a.dist - b.dist);
@@ -572,17 +844,17 @@ export class EngineAudio {
         if (cand && !isPaused) {
           const res = this._calcDopplerAndPan(cand.car, cand.pos, cand.rotY, camPos, camRight);
           const oRpm = Math.max(4800, cand.car.rpm || 4800);
-          const oFreq = (oRpm / 60) * 3.0 * res.doppler;
-          voice.osc.frequency.setTargetAtTime(oFreq, t, 0.04);
+          const oFreq = (oRpm / 60) * 3.0 * (cam === 'track' ? res.doppler : 1.0);
+          voice.osc.frequency.setTargetAtTime(oFreq, t, 0.02);
 
-          const distNorm = Math.max(0, 1 - cand.dist / 160);
-          const oVol = distNorm * distNorm * (0.06 + (cand.car.throttle || 0) * 0.09);
-          voice.gain.gain.setTargetAtTime(oVol, t, 0.06);
+          const distNorm = Math.max(0, 1 - cand.dist / 180);
+          const oVol = distNorm * distNorm * (0.09 + (cand.car.throttle || 0) * 0.14);
+          voice.gain.gain.setTargetAtTime(oVol, t, 0.04);
 
           if (voice.pan) voice.pan.pan.setTargetAtTime(res.pan, t, 0.05);
 
-          const oLp = Math.max(500, 3800 - cand.dist * 18);
-          voice.lp.frequency.setTargetAtTime(oLp, t, 0.06);
+          const oLp = Math.max(900, 4800 - cand.dist * 10);
+          voice.lp.frequency.setTargetAtTime(oLp, t, 0.05);
         } else {
           voice.gain.gain.setTargetAtTime(0, t, 0.08);
         }
@@ -596,14 +868,14 @@ export class EngineAudio {
     // ==========================================
     // 6. CHIRRIDO DE NEUMÁTICOS Y GRAVA
     // ==========================================
-    const brakeLock = curBrake > 0.35 && carSpeed > 8 ? (curBrake - 0.35) * 1.6 : 0;
+    const brakeLock = Math.min(1, (car.lock || 0) * 1.4);   // solo si bloquea (antes: en cualquier frenada fuerte)
     const slideInt = (Math.abs(car.slide || 0) * 5 + Math.abs(car.beta || 0) * 8) * Math.min(1, carSpeed / 15);
     const totalSkid = Math.max(0, Math.min(1, Math.max(brakeLock, slideInt)));
 
     const screechVol = isMuted ? 0 : totalSkid * (onboard ? 0.20 : 0.14) * Math.min(1, carSpeed / 10);
     this.screechGain.gain.setTargetAtTime(screechVol, t, 0.05);
 
-    const offTrack = Math.abs(car.d || 0) > 6.8 && carSpeed > 4;
+    const offTrack = Math.abs(car.d || 0) > 10.6 && carSpeed > 4 && !car.inPit;   // pista de 18 m + piano
     const gravelVol = isMuted || !offTrack ? 0 : Math.min(1, carSpeed / 25) * 0.22;
     this.gravelGain.gain.setTargetAtTime(gravelVol, t, 0.06);
   }
