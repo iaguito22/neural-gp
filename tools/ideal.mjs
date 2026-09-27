@@ -6,12 +6,13 @@ import { buildTrack, HALF_W, CAR_HALF } from '../js/track.js';
 import { buildLine, lineGeometry } from '../js/brain.js';
 import { gearPower } from '../js/sim.js';
 import fs from 'fs';
+import { IDEAL_NODES } from '../js/idealNodes.js';
 const LIM = HALF_W - CAR_HALF - 1.1;
 // nodos cada 10 m (más finos que los de los pilotos): con 20 m no le daba para cruzar de fuera a dentro en las curvas lentas
 const NS = +(process.env.NS || 10), SC = 20 / NS;   // baches y penalización igual que con 20 m, en metros
 const LAM = +(process.env.LAM || 0);   // peso extra de la curvatura (0: solo tiempo)
 const STEPS = [[6, 3], [4, 2], [3, 1.5], [2, 1], [1.2, 0.6], [2, 0.4], [1, 0.3], [0.7, 0.15]];   // margen: la de libro no va rozando la línea blanca
-const out = {};
+const out = { ...IDEAL_NODES };   // los circuitos que no se recalculan se conservan
 for (const id of (process.argv[2] || 'gp,urban,night').split(',')) {
   const T = buildTrack(id), N = T.N;
   const n = Math.round(T.L / NS), step = T.L / n;

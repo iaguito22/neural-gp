@@ -40,10 +40,18 @@ const DESERT = [
   [-780, 260, 38], [-860, 0, 48],
 ];
 
+// Montaña al atardecer: curvas enlazadas de radios variados, una horquilla y dos curvones rápidos; nada en L
+const MOUNT = [
+  [1200, 0, 50], [1330, 250, 220], [1150, 520, 90], [1320, 760, 140], [1100, 1000, 110], [700, 1080, 300], [320, 1240, 35],
+  [420, 960, 110], [230, 820, 120], [20, 860, 70], [-120, 780, 90], [-300, 900, 65], [-620, 760, 200], [-420, 300, 70],
+  [-700, 20, 90], [-420, -20, 200],
+];
+
 export const CIRCUITS = {
   gp: { id: 'gp', name: 'Neural Park', place: 'Circuito permanente · de día', laps: 20 },
   urban: { id: 'urban', name: 'Porto Cidade', place: 'Urbano rápido junto al puerto · de día', urban: true, poly: URBAN, elev: 0.35 },
   night: { id: 'night', name: 'Al Noor', place: 'Desierto · carrera de noche', night: true, poly: DESERT, elev: 0.7 },
+  mount: { id: 'mount', name: 'Monte Alto', place: 'Montaña · al atardecer', sunset: true, poly: MOUNT, elev: 2.4 },
 };
 
 // Polígono con esquinas redondeadas -> puntos de control densos (arcos cada ~8 m, rectas cada ~60 m)
