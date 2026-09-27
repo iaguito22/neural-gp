@@ -13,6 +13,7 @@ import { Radio } from './radio.js';
 import { Manager } from './manager.js';
 import { TEAMS } from './teams.js';
 import { buildWeather } from './weather.js';
+import { buildFx } from './fx.js';
 
 // solo se guardan los ajustes: lo aprendido empieza de cero cada fin de semana (cada uno es un mundo)
 const SETTINGS = 'ngp-settings-v1';
@@ -53,6 +54,7 @@ async function main() {
   const sim = new Sim(T, { raceLaps: +(params.get('laps') || settings.raceLaps || 20), brains: {} });
   sim.weatherMode = params.get('wx') || settings.weather || 'random';
   const visuals = sim.cars.map((car) => { const v = buildCar(car.team, car.drv); scene.add(v.root); return v; });
+  const fx = buildFx(scene, T, sim, visuals, world);
 
   const director = new Director(camera, renderer.domElement, T, sim, world, visuals);
   scenery.addCameraTowers(director.trackCams);
@@ -183,6 +185,7 @@ async function main() {
     sim.cars.forEach((car, k) => place(car, visuals[k], dt * (app.speed || 0), dt));
     director.update(dt);
     weatherFx.update(dt, sim, director.type, visuals);
+    fx.update(dt);
     focusPos.copy(visuals[director.focus.i].root.position);
     world.update(dt, sim, focusPos, camera.position);
     scenery.update(dt, focusPos, camera.position);
@@ -232,7 +235,7 @@ async function main() {
   intro.querySelector('#iTrack').onchange = (e) => { writeJSON(SETTINGS, { ...settings, quality: intro.querySelector('#iQ').value, track: e.target.value, raceLaps: +intro.querySelector('#iLaps').value }); location.href = location.pathname; };
   if (params.get('autostart')) { ui.closeModal(); startSession(params.get('autostart')); }
   requestAnimationFrame(loop);
-  window.__app = app; window.__vis = visuals; window.__world = world; window.__sim = sim; window.__dir = director; window.__scene = scene; window.__THREE = THREE; window.__renderer = renderer;
+  window.__app = app; window.__vis = visuals; window.__world = world; window.__sim = sim; window.__dir = director; window.__scene = scene; window.__THREE = THREE; window.__renderer = renderer; window.__fx = fx;
 }
 
 main().catch((e) => { console.error(e); const el = document.getElementById('loadMsg'); if (el) el.textContent = 'Error: ' + e.message; });

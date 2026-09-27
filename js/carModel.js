@@ -301,7 +301,7 @@ export function buildCar(team, drv) {
   }
 
   const car = {
-    root, body, lod, hi, lo, detailed: true, wheels, loWheels, flap: flapPivot, rain, M, compound: 'M', fast: false,
+    root, body, lod, hi, lo, detailed: true, wheels, loWheels, flap: flapPivot, rain, fw, rw, fwLo, rwLo, M, compound: 'M', fast: false,
     // rápido: dibujo desenfocado (sin texto), como el desenfoque de movimiento de la tele
     setCompound(c, fast = false) {
       if (c === this.compound && fast === this.fast) return; this.compound = c; this.fast = fast;
