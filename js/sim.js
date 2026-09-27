@@ -97,9 +97,9 @@ export class Sim {
       brain: brain && brain.v === 3 && brain.nodes.length === Math.round(T.L / NODE_STEP) ? brain : newBrain(T, drv, this.rng),
       line: new Float64Array(T.N), kl: new Float64Array(T.N), len: new Float64Array(T.N), vprof: new Float64Array(T.N),
       s: 0, lap: 0, dist: 0, v: 0, d: 0, dev: 0, devV: 0, devTarget: 0, targetAbs: 0,
-      a: 0, alat: 0, throttle: 0, brake: 0, gear: 1, rpm: 0, steer: 0, yaw: 0, slide: 0, pitch: 0, roll: 0, psi: 0, beta: 0, exec: 1,
+      a: 0, alat: 0, lock: 0, throttle: 0, brake: 0, gear: 1, rpm: 0, steer: 0, yaw: 0, slide: 0, pitch: 0, roll: 0, psi: 0, beta: 0, exec: 1,
       state: 'garage', inPit: true, pitPhase: 'box', pitT: 0, pitReq: false, stopTime: 0, stops: 0,
-      tyre: { c: 'M', wear: 0, temp: 0.4, age: 0, used: new Set() }, fuel: 20, dmg: 0,
+      tyre: { c: 'M', wear: 0, temp: 0.4, age: 0, used: new Set() }, fuel: 20, dmg: 0, parts: { fw: 0, rw: 0, susp: 0 },
       drs: false, drsOk: false, mode: 'free', target: null, defMoved: false, dive: 0, squeeze: 0,
       mistake: null, off: 0, retired: false, finished: false, finishT: 0,
       lapStart: 0, sectorStart: 0, curSectors: [0, 0, 0], sector: 0, lastLap: 0, best: Infinity, bestSec: [Infinity, Infinity, Infinity], laps: [],
@@ -145,6 +145,7 @@ export class Sim {
     const t = car.tyre, C = COMPOUNDS[t.c];
     let g = C.grip * (1 - 0.07 * t.wear) * wetGrip(t.c, known ? car.wetEst ?? 0 : this.wetAt(car));
     if (t.wear > 0.72) g *= Math.max(0.72, 1 - (t.wear - 0.72) * 1.15);
+    if (t.flat) g *= 1 - 0.025 * t.flat;                          // goma cuadrada por un bloqueo
     const temp = Math.min(1, t.temp + (known ? 0.02 : 0));
     g *= 0.9 + 0.1 * temp;
     return g;
@@ -176,12 +177,13 @@ export class Sim {
   startSession(id) {
     const T = this.T;
     this.session = { id, ...SESSIONS[id], phase: 'run', t0: 0, done: false };
+    this.gravel = []; this.barrierHits = [];
     this.t = 0; this.flag = 'GREEN'; this.vscT = 0; this.initWeather(id); this.fastest = null; this.sessionBestSec = null; this.zoneBest = null; this.bestCP = null;
     const isRace = id === 'RACE';
     const active = this.activeCars(id);
     for (const car of this.cars) {
       car.best = Infinity; car.bestSec = [Infinity, Infinity, Infinity]; car.laps = []; car.lastLap = 0;
-      car.cpt = []; car.hist = []; car.finished = false; car.stops = 0; car.passedBy = null; car.dmg = 0; car.mistake = null; car.off = 0;
+      car.cpt = []; car.hist = []; car.finished = false; car.stops = 0; car.passedBy = null; car.dmg = 0; car.parts = { fw: 0, rw: 0, susp: 0 }; car.mistake = null; car.off = 0;
       car.zoneIn = -1; car.planned = -1; car.mode = 'free'; car.drs = false; car.slide = 0; car.v = 0; car.dev = 0; car.devV = 0; car.psi = 0; car.beta = 0; car.excursion = false;
       car.wetEst = this.wx.wet; car.wxC = null; car.wxPit = false; car.wxBias = null; this.pickKB(car);
       car.sector = 0; car.sectorStart = this.t; car.curSectors = [0, 0, 0]; car.prevSectors = []; car.secCol = []; car.prevSecCol = []; car.delta = null; car.deltaOwn = null; car.bestCP = null;   // (antes arrastraba los sectores de la sesión anterior: S1 negativo)
@@ -832,11 +834,16 @@ export class Sim {
       const st = ad > HALF_W + 3 ? T.surface(car.s, car.d >= 0 ? 1 : -1) : 2;
       surfMu = (st === 0 ? 0.55 : st === 1 ? 0.5 : st === 2 ? 0.88 : 0.92) * (1 - 0.3 * this.wx.wet);
       surfDrag = (st === 1 ? 9 : st === 0 ? 2.5 : 0) * Math.min(1, car.v / 30);   // la grava frena mucho a alta velocidad; despacio se sale
+      if (st === 1 && car.v > 6) { car.gravelT = this.t; car.gravelSide = car.d >= 0 ? 1 : -1; }
+    } else if (!car.inPit) {
+      // vuelve a la pista con las ruedas llenas de grava: la deja esparcida unos metros (resbala hasta que se limpia)
+      if (car.gravelT != null && this.t - car.gravelT < 2 && ad < HALF_W + 0.5) { this.dropGravel(car); car.gravelT = null; }
+      surfMu *= this.gravelGrip(car);
     }
     const talent = 1 + 0.018 * (car.drv.pace - 0.88);
     const muTrue = (1 + (car.exitBoost || 0)) * MU * team.grip * talent * tg * this.evoFactor() * (1 - 0.00035 * car.fuel) *
       (z >= 0 ? this.zoneTrue[z] : 1) * dirty * offLine * surfMu * (1 - 0.06 * car.dmg) * car.wobble;
-    const aero = AERO * team.aero * (car.drs ? 0.8 : 1);
+    const aero = AERO * team.aero * (car.drs ? 0.8 : 1) * (1 - 0.18 * car.parts.rw);
     const drag = CD * team.drag * (car.drs ? 0.87 : 1) * tow;
     const v = Math.max(0.1, car.v);
     const down = G + aero * v * v;
@@ -907,8 +914,17 @@ export class Sim {
     const u = (axT / axCap) ** 2 + (ayCmd / capT) ** 2;
     let E = 0, ay = ayCmd, ax = axT;
     if (u > 1) { const sq = Math.sqrt(u); E = sq - 1; ay /= sq; ax /= sq; }
-    // el exceso hace deslizar la trasera (frenando o acelerando fuerte) o el morro (a medio gas: se abre)
     const lon = Math.min(1, Math.abs(axT) / axCap);
+    // bloqueo: frenando fuerte con exceso, se bloquean las delanteras (humo, el morro deja de girar y frena algo menos);
+    // si dura, cuadra la goma (vibra y agarra un poco menos el resto de la tanda)
+    const lockRaw = axT < 0 && E > 0.015 && lon > 0.55 && v > 12 ? Math.min(1, E * 5 + (lon - 0.55)) : 0;
+    car.lock += ((lockRaw > car.lock ? lockRaw : lockRaw * 0.5) - car.lock) * Math.min(1, DT * 18);
+    if (car.lock > 0.05) {
+      ay *= 1 - 0.55 * car.lock; ax *= 1 - 0.12 * car.lock;
+      car.tyre.flat = Math.min(1, (car.tyre.flat || 0) + car.lock * DT * 0.05 * (0.6 + v / 80));
+      if (!car.lockOn && car.lock > 0.3) { car.lockOn = true; this.emit({ type: 'lockup', car, corner: this.cornerAt(car.s), sev: car.lock }); }
+    } else if (car.lock < 0.02) { car.lock = 0; car.lockOn = false; }
+    // el exceso hace deslizar la trasera (frenando o acelerando fuerte) o el morro (a medio gas: se abre)
     const overs = axT < 0 ? 0.25 + 0.55 * lon : 0.25 + 0.65 * lon;
     // cazar el coche con contravolante (el tacto se aprende aparte en seco y en mojado)
     const F = car.brain.feel, wm = Math.min(1, this.wx.wet * 3), feel = F ? F.d * (1 - wm) + F.w * wm : 0.5;
@@ -1037,9 +1053,9 @@ export class Sim {
   // Contra la barrera fuera de un trompo: roce (rebota y pierde velocidad), golpe (trompo y daños) o accidente
   hitWall(car, side) {
     const vn = car.v * Math.abs(Math.sin(car.psi)) + 0.4;
-    if (vn > 3) this.emit({ type: 'contact', car, wall: true, sev: vn });
-    if (vn > 22 || (vn > 15 && this.rng() < 0.35)) { car.v = 0; car.mistake = null; this.retire(car, 'accidente'); return; }
-    if (vn > 6) car.dmg = Math.min(1, car.dmg + (vn > 10 ? 0.35 : 0.15));
+    if (vn > 3) { this.emit({ type: 'contact', car, wall: true, sev: vn }); this.barrierHit(car, side, vn); }
+    if (vn > 22 || (vn > 15 && this.rng() < 0.35)) { this.damage(car, 'susp', 1); this.damage(car, 'fw', 0.8); car.v = 0; car.mistake = null; this.retire(car, 'accidente'); return; }
+    if (vn > 6) { this.damage(car, 'susp', vn > 10 ? 0.35 : 0.15); if (Math.abs(car.psi) > 0.25) this.damage(car, 'fw', vn * 0.04); }
     car.v *= 1 - Math.min(0.35, vn * 0.025);
     car.psi = -side * Math.abs(car.psi) * 0.25;
     if (vn > 10 && this.rng() < 0.6) { car.beta = -side * 0.5; this.startSpin(car, 0, 2); }
@@ -1083,6 +1099,7 @@ export class Sim {
     const side = Math.sign(car.d) || m.out;
     const offT = Math.abs(car.d) > HALF_W + 0.3;
     const surf = offT ? T.surface(car.s, side) : -1;           // -1 pista, 0 hierba, 1 grava, 2 asfalto pintado
+    if (surf === 1 && car.v > 4) { car.gravelT = this.t; car.gravelSide = side; }
     const v = car.v;
     if (m.phase === 'slide') {
       const dec = surf === 1 ? 19 : surf === 0 ? 6 : surf === 2 ? 10 : 11 + Math.min(6, v * 0.08); // de lado frena mucho; la grava, más; la hierba patina
@@ -1104,9 +1121,11 @@ export class Sim {
       if (Math.abs(car.d) > B) {
         car.d = side * B;
         const vn = v * (Math.abs(Math.sin(m.psi)) + 0.1);    // velocidad de impacto contra la barrera
-        if (vn > 3) this.emit({ type: 'contact', car, wall: true, sev: vn });
-        if (vn > 24 || (vn > 17 && this.rng() < 0.3)) { car.v = 0; m.phase = 'stop'; this.retire(car, 'accidente'); car.mistake = null; return; }
-        if (vn > 7) car.dmg = Math.min(1, car.dmg + 0.25);
+        if (vn > 3) { this.emit({ type: 'contact', car, wall: true, sev: vn }); this.barrierHit(car, side, vn); }
+        // de lado o de culo contra el muro: trasero y suspensión; de frente, el alerón delantero
+        const tail = Math.cos(m.rot) < 0;
+        if (vn > 24 || (vn > 17 && this.rng() < 0.3)) { this.damage(car, 'susp', 1); this.damage(car, tail ? 'rw' : 'fw', 1); car.v = 0; m.phase = 'stop'; this.retire(car, 'accidente'); car.mistake = null; return; }
+        if (vn > 7) { this.damage(car, 'susp', 0.25); this.damage(car, tail ? 'rw' : 'fw', vn * 0.05); }
         car.v *= 0.35; m.psi *= -0.3; m.w *= 0.5;
       }
       if (car.v < 1.2) { car.v = 0; m.phase = 'stop'; m.stopT = m.t; }
@@ -1125,6 +1144,41 @@ export class Sim {
     car.gear = car.v < 0.5 ? 0 : Math.max(1, car.gear); car.rpm = Math.max(4500, car.rpm - 6000 * DT);
     car.off = offT ? car.off + DT : 0; car.lapClean = false;
     car.tyre.wear += car.v * DT / T.L * 0.02;
+  }
+
+  // daños por piezas: alerón delantero (fw), trasero (rw) y suspensión (susp), 0-1. dmg = el peor (lo que ya usaban
+  // ritmo, paradas y abandonos). Cada pieza que se rompe suelta trozos (evento 'debris' para lo visual).
+  damage(car, part, amt) {
+    if (amt <= 0 || car.out) return;
+    const P = car.parts, before = P[part];
+    P[part] = Math.min(1, P[part] + amt);
+    car.dmg = Math.max(car.dmg, P.fw * 0.7, P.rw * 0.8, P.susp);
+    this.emit({ type: 'debris', car, part, sev: P[part] - before, broken: before < 0.5 && P[part] >= 0.5, s: car.s, d: car.d });
+  }
+
+  // grava en la pista: parche que se va limpiando con el tiempo y con cada coche que pasa por encima
+  dropGravel(car) {
+    const g = { s: car.s, d: car.gravelSide * (HALF_W - 2), len: 25 + car.v * 0.8, w: 3.5, amt: 1, t: this.t };
+    this.gravel.push(g); if (this.gravel.length > 30) this.gravel.shift();
+    this.emit({ type: 'gravel', car, ...g });
+  }
+  gravelGrip(car) {
+    let mu = 1;
+    for (let k = this.gravel.length - 1; k >= 0; k--) {
+      const g = this.gravel[k];
+      const amt = g.amt - (this.t - g.t) / 300;
+      if (amt <= 0) { this.gravel.splice(k, 1); continue; }
+      const rel = this.T.rel(g.s, car.s);
+      if (rel > -2 && rel < g.len && Math.abs(car.d - g.d) < g.w) { mu = Math.min(mu, 1 - 0.14 * amt); g.amt -= DT * 0.03; }
+    }
+    return mu;
+  }
+
+  // golpe contra la barrera: se apunta para que las barreras (TecPro, neumáticos) se vean movidas
+  barrierHit(car, side, sev) {
+    const h = { s: car.s, d: car.d, side, sev, t: this.t, car };
+    this.barrierHits.push(h); if (this.barrierHits.length > 60) this.barrierHits.shift();
+    this.emit({ type: 'barrier', ...h });
   }
 
   retire(car, why) {
@@ -1261,7 +1315,7 @@ export class Sim {
       }
       let c = next.c;
       car.tyre = { c, wear: 0, temp: 0.6, age: 0, used: car.tyre.used };
-      car.tyre.used.add(c); car.stops++; car.dmg = 0; car.pitReq = false;
+      car.tyre.used.add(c); car.stops++; car.dmg = 0; car.parts = { fw: 0, rw: 0, susp: 0 }; car.pitReq = false;
       car.pitPhase = 'out'; car.lapKind = 'race';
       this.rebuildProfile(car);
       this.emit({ type: 'pitdone', car, time: car.stopTime, c });
@@ -1848,7 +1902,7 @@ export class Sim {
     back.lastContact = this.t; front.lastContact = this.t;
     const r = this.rng();
     this.emit({ type: 'contact', car: back, other: front, sev });
-    if (sev > 7) back.dmg = Math.min(1, back.dmg + 0.5);
+    if (sev > 3) { this.damage(back, 'fw', sev > 7 ? 0.5 + sev * 0.02 : sev * 0.04); this.damage(front, 'rw', sev > 9 ? sev * 0.03 : 0); }
     if (sev > 11 && r < 0.3) { front.beta = (this.rng() < 0.5 ? 1 : -1) * 0.5; this.startSpin(front, 0, 2.5); }
     if (sev > 16 && r < 0.25) this.retire(back, 'daños');
     if (back.dmg > 0.3 && this.session.id === 'RACE') back.pitReq = true;

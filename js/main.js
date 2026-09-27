@@ -183,7 +183,7 @@ async function main() {
     focusPos.copy(visuals[director.focus.i].root.position);
     world.update(dt, sim, focusPos, camera.position);
     scenery.update(dt, focusPos, camera.position);
-    app.audio.update(director.focus, director.type, camera.position.distanceTo(focusPos), app.skipping ? 99 : app.speed, sim.wx?.rain ?? 0);
+    app.audio.update(director.focus, director.type, camera, focusPos, app.skipping ? 99 : app.speed, sim, visuals);
     ui.update(dt);
     renderer.render(scene, camera);
   }
