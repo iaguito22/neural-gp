@@ -168,7 +168,7 @@ export class Radio {
     this.gap -= dt;
     if (this.cur) {
       this.curT -= dt;
-      if (this.curT <= 0) { this.cur = null; el.classList.remove('on'); this.gap = 0.6; this.app.audio?.duck?.(false); }
+      if (this.curT <= 0) { this.cur = null; el.classList.remove('on'); this.gap = 0.6; }
       return;
     }
     // mensajes viejos (la sim va rápida) se descartan
@@ -196,13 +196,12 @@ export class Radio {
   speak(m) {
     const ss = window.speechSynthesis; if (!ss) return;
     this.beep();
-    this.app.audio?.duck?.(true);
     ss.cancel();
     const v = this.voices;
     m.lines.forEach(([w, t], k) => {
       const u = new SpeechSynthesisUtterance(t);
       u.lang = 'es-ES'; if (v.length) u.voice = v[(w === 'd' ? 1 : 0) % v.length];
-      u.rate = w === 'd' ? 1.15 : 1.05; u.pitch = w === 'd' ? 1.1 : 0.8; u.volume = 1;
+      u.rate = w === 'd' ? 1.15 : 1.05; u.pitch = w === 'd' ? 1.1 : 0.8; u.volume = 0.9;
       if (k === m.lines.length - 1) u.onend = () => this.beep(0.7);
       ss.speak(u);
     });
@@ -212,7 +211,7 @@ export class Radio {
   beep(g = 1) {
     try {
       const ctx = this.ctx || (this.ctx = new (window.AudioContext || window.webkitAudioContext)());
-      const t = ctx.currentTime, out = ctx.createGain(); out.gain.value = 0.09 * g; out.connect(ctx.destination);
+      const t = ctx.currentTime, out = ctx.createGain(); out.gain.value = 0.06 * g; out.connect(ctx.destination);
       [[1200, 0], [900, 0.07]].forEach(([fq, d]) => {
         const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = fq;
         const e = ctx.createGain(); e.gain.setValueAtTime(0, t + d); e.gain.linearRampToValueAtTime(1, t + d + 0.005); e.gain.setValueAtTime(1, t + d + 0.05); e.gain.linearRampToValueAtTime(0, t + d + 0.06);

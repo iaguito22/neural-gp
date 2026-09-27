@@ -541,9 +541,6 @@ export class EngineAudio {
     this.on = true;
   }
 
-  // baja el resto del sonido mientras habla la radio (para que se entienda)
-  duck(on) { this.ducked = on; }
-
   stop() {
     this.on = false;
     if (this.master && this.ctx) {
@@ -651,9 +648,8 @@ export class EngineAudio {
           ? 0.28
           : 0.30 * distAtten;
 
-    if (this.ducked) masterVol *= 0.55;
     if (isMuted) masterVol = 0;
-    this.master.gain.setTargetAtTime(masterVol, t, this.ducked ? 0.1 : 0.25);
+    this.master.gain.setTargetAtTime(masterVol, t, 0.25);
 
     // Reverberación de circuito (seca en cabina, espaciosa en planos exteriores)
     const reverbVol = isMuted || onboard ? 0 : (cam === 'track' ? 0.35 : cam === 'heli' ? 0.36 : 0.16);
