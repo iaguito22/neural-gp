@@ -567,23 +567,22 @@ export class Director {
             cam.up.set(0, 1, 0); this.smoothLook.copy(this.pc).addScaledVector(f2, 18); cam.lookAt(this.smoothLook); fov = 48; break;
           }
         }
+        // dron: orbita alrededor del coche, sube y se acerca despacio; si algo lo tapa (edificios, gradas) gira más rápido y sube
         if (this.first || this.droneAngle == null) {
           this.droneAngle = Math.random() * Math.PI * 2;
           this.droneDir = (Math.random() < 0.5 ? 1 : -1) * (0.12 + Math.random() * 0.08);
-          this.droneT = Math.random() * 100;
+          this.droneT = Math.random() * 100; this.droneLift = 0; this.droneLosT = 0;
         }
         this.droneT += dt;
-        this.droneAngle += this.droneDir * dt;
+        this.droneLosT -= dt;
+        if (this.droneLosT <= 0) { this.droneLosT = 0.2; this.droneBlocked = this.world.losBlocked(cam.position, v3.copy(carPos).setY(carPos.y + 0.8)); }
+        this.droneLift = Math.max(0, Math.min(30, this.droneLift + (this.droneBlocked ? 14 : -3) * dt));
+        this.droneAngle += this.droneDir * dt * (this.droneBlocked ? 4 : 1);
         const dist = 24 + 6 * Math.sin(this.droneT * 0.35);
-        const h = Math.max(3, 13 + 5 * Math.sin(this.droneT * 0.25 + 1.0));
-        cam.position.set(
-          carPos.x + Math.sin(this.droneAngle) * dist,
-          carPos.y + h,
-          carPos.z + Math.cos(this.droneAngle) * dist
-        );
-        const lookTarget = v2.copy(carPos).addScaledVector(fwd, 4).add(v3.set(0, 0.6, 0));
-        if (this.first) this.smoothLook.copy(lookTarget);
-        else this.smoothLook.lerp(lookTarget, 1 - Math.exp(-dt * 8));
+        const h = Math.max(3, 13 + 5 * Math.sin(this.droneT * 0.25 + 1.0) + this.droneLift);
+        cam.position.set(carPos.x + Math.sin(this.droneAngle) * dist, carPos.y + h, carPos.z + Math.cos(this.droneAngle) * dist);
+        // mira al coche sin retraso (con retraso, a 300 km/h o con la sim acelerada, el coche se salía del plano)
+        this.smoothLook.copy(carPos).addScaledVector(fwd, 4); this.smoothLook.y += 0.6;
         cam.up.set(0, 1, 0);
         cam.lookAt(this.smoothLook);
         fov = 50;

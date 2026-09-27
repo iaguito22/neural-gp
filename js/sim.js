@@ -578,7 +578,7 @@ export class Sim {
       if (rel <= 0 || rel > 110) continue;
       if (!tgt || rel < tgt.rel) tgt = { o, rel };
     }
-    car.mode = 'free'; car.target = null; car.dive = 0; car.squeeze = 0;
+    car.mode = 'free'; car.target = null; car.dive = 0; car.squeeze = 0; car.gripAdv = 1;
     if (yieldTo) car.mode = 'yield';
     else if (tgt && !vsc && car.mistake == null) {
       const o = tgt.o; const gapT = tgt.rel / Math.max(20, car.v);
@@ -590,8 +590,11 @@ export class Sim {
       const zone = T.zones[nc.id];
       const ot = car.brain.ot[zone.id];
       const belief = (ot.w + 1) / (ot.t + 2);
-      const willing = car.drv.agg * 0.55 + belief * 0.6 + (o.dmg > 0 ? 0.3 : 0) + (race && o.tyre.wear - car.tyre.wear) * 0.8;
-      if (want && (willing > 0.55 || !race)) { car.mode = 'attack'; car.target = o; }
+      // ventaja clara de agarre (sobre todo en mojado: intermedios contra lisos): en curva va mucho más rápido y lo sabe
+      const adv = race ? this.tyreGrip(car, true) / Math.max(0.3, this.tyreGrip(o, true)) : 1;
+      car.gripAdv = adv;
+      const willing = car.drv.agg * 0.55 + belief * 0.6 + (o.dmg > 0 ? 0.3 : 0) + (race && o.tyre.wear - car.tyre.wear) * 0.8 + Math.max(0, adv - 1) * 4;
+      if ((want || (race && !lap1 && !just && adv > 1.06 && gapT < 1.2)) && (willing > 0.55 || !race)) { car.mode = 'attack'; car.target = o; }
     }
     // plan de ataque para la próxima curva (se mantiene mientras se está en ella)
     const zNow = T.zoneOf[i];
@@ -669,13 +672,17 @@ export class Sim {
           if (Math.abs(dc - o.d) < SEP + 0.25) c += 400;
           if ((o.d - car.d) * (o.d - dc) < 0 && Math.abs(o.d - car.d) > 0.3) c += 400;
         } else if (rel > 0) {
-          if (g < SEP + 0.4) {
+          // con mucha más goma que él (intermedios contra lisos en mojado) no espera detrás: se pone al lado en la curva,
+          // en un carril limpio (con solo SEP + 0,4 se quedaba medio solapado y el tope de seguir le frenaba igual)
+          const clearAdv = car.mode === 'attack' && car.target === o && car.gripAdv > 1.06;
+          if (g < SEP + (clearAdv && !onStraight ? 1.4 : 0.4)) {
             const closing = car.v - o.v;
             // en curva rápida, detrás y por su trazada (fuera de ella tenía que levantar: frenaba mucho siguiendo a otro)
-            if (fastC) c += 0.25 * (1 - Math.min(rel, 110) / 130);
+            if (fastC && !clearAdv) c += 0.25 * (1 - Math.min(rel, 110) / 130);
             else if (car.mode === 'attack' && car.target === o) {
-              if (onStraight && toCorner > brakeDist + 110 && rel < 60) c -= 1.2;
-              else if ((plan === 'exit' || plan === 'cutback') && car.atkPhase !== 'exit') c += 0.3; // paciencia: detrás hasta la salida
+              // (con ventaja clara no se esconde al rebufo: en mojado no hay DRS y en recta los lisos corren igual; se abre antes)
+              if (onStraight && toCorner > brakeDist + (clearAdv ? 260 : 110) && rel < 60) c -= clearAdv ? 0.3 : 1.2;
+              else if ((plan === 'exit' || plan === 'cutback') && car.atkPhase !== 'exit' && !clearAdv) c += 0.3; // paciencia: detrás hasta la salida
               else c += 7 * (1 - Math.min(rel, 110) / 130);
             } else {
               c += (closing > 1.5 ? 4 : 0.4) * (1 - Math.min(rel, 130) / 140);
