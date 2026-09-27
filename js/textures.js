@@ -204,25 +204,142 @@ export function numberTex(num, fg = '#ffffff', bg = null) {
 export function livery(team, num) {
   return once('liv' + team.id + num, () => {
     const W = 1024, H = 1024, c = canvas(W, H), g = c.getContext('2d');
+    // Base c1
     g.fillStyle = team.c1; g.fillRect(0, 0, W, H);
-    // vientre oscuro
-    g.fillStyle = '#15171b'; g.fillRect(0, 0, W * 0.12, H); g.fillRect(W * 0.88, 0, W * 0.12, H);
-    // espina superior (u ≈ 0.5)
-    g.fillStyle = team.c2; g.fillRect(W * 0.47, 0, W * 0.06, H);
-    g.fillStyle = team.c3; g.fillRect(W * 0.455, H * 0.05, W * 0.012, H * 0.9); g.fillRect(W * 0.533, H * 0.05, W * 0.012, H * 0.9);
-    // flechas laterales (u ≈ 0.25 y 0.75)
-    for (const u of [0.25, 0.75]) {
-      g.fillStyle = team.c2;
-      g.beginPath(); g.moveTo(W * (u - 0.1), H * 0.25); g.lineTo(W * (u + 0.1), H * 0.33); g.lineTo(W * (u + 0.1), H * 0.62); g.lineTo(W * (u - 0.1), H * 0.7); g.fill();
-      g.fillStyle = team.c3; g.fillRect(W * (u - 0.1), H * 0.24, W * 0.2, H * 0.012);
+
+    // Vientre y bajos en fibra de carbono expuesta
+    g.fillStyle = '#101114';
+    g.fillRect(0, 0, W * 0.14, H);
+    g.fillRect(W * 0.86, 0, W * 0.14, H);
+
+    // Patrón sutil de carbono en los bajos
+    g.fillStyle = 'rgba(255,255,255,0.03)';
+    for (let y = 0; y < H; y += 8) {
+      for (let x = 0; x < W * 0.14; x += 8) { if (((x + y) / 8) % 2 === 0) g.fillRect(x, y, 4, 4); }
+      for (let x = W * 0.86; x < W; x += 8) { if (((x + y) / 8) % 2 === 0) g.fillRect(x, y, 4, 4); }
     }
-    // nombre del equipo en los pontones
-    g.save(); g.fillStyle = '#ffffff'; g.font = `900 ${W * 0.05}px "Titillium Web", Arial`; g.textAlign = 'center';
-    for (const u of [0.25, 0.75]) { g.save(); g.translate(W * u, H * 0.48); g.rotate(u < 0.5 ? Math.PI / 2 : -Math.PI / 2); if (u < 0.5) g.scale(-1, 1); else g.scale(-1, 1); g.fillText(team.short, 0, 0); g.restore(); }
+
+    // Líneas de corte inferior en color terciario c3
+    g.fillStyle = team.c3;
+    g.fillRect(W * 0.136, 0, W * 0.012, H);
+    g.fillRect(W * 0.852, 0, W * 0.012, H);
+
+    // Franja central en el morro y lomo (c2 y c3)
+    g.fillStyle = team.c2;
+    g.beginPath();
+    g.moveTo(W * 0.45, 0); g.lineTo(W * 0.55, 0);
+    g.lineTo(W * 0.57, H * 0.35); g.lineTo(W * 0.43, H * 0.35);
+    g.closePath(); g.fill();
+
+    // Fileteados c3 a los lados de la franja del morro
+    g.fillStyle = team.c3;
+    g.fillRect(W * 0.425, 0, W * 0.01, H * 0.35);
+    g.fillRect(W * 0.565, 0, W * 0.01, H * 0.35);
+
+    // Espina superior del airbox y capó motor (v: 0.35 a 0.95)
+    g.fillStyle = team.c2;
+    g.fillRect(W * 0.46, H * 0.35, W * 0.08, H * 0.62);
+    g.fillStyle = team.c3;
+    g.fillRect(W * 0.445, H * 0.38, W * 0.012, H * 0.58);
+    g.fillRect(W * 0.543, H * 0.38, W * 0.012, H * 0.58);
+
+    // Gráficos dinámicos laterales en los pontones (u ≈ 0.26 y 0.74)
+    for (const u of [0.26, 0.74]) {
+      const sgn = u < 0.5 ? 1 : -1;
+      // Cuña c2
+      g.fillStyle = team.c2;
+      g.beginPath();
+      g.moveTo(W * (u - 0.11 * sgn), H * 0.22);
+      g.lineTo(W * (u + 0.11 * sgn), H * 0.32);
+      g.lineTo(W * (u + 0.10 * sgn), H * 0.72);
+      g.lineTo(W * (u - 0.11 * sgn), H * 0.78);
+      g.closePath(); g.fill();
+
+      // Franjas de acento c3
+      g.fillStyle = team.c3;
+      g.beginPath();
+      g.moveTo(W * (u - 0.12 * sgn), H * 0.21);
+      g.lineTo(W * (u + 0.12 * sgn), H * 0.31);
+      g.lineTo(W * (u + 0.12 * sgn), H * 0.33);
+      g.lineTo(W * (u - 0.12 * sgn), H * 0.23);
+      g.closePath(); g.fill();
+
+      g.beginPath();
+      g.moveTo(W * (u + 0.11 * sgn), H * 0.71);
+      g.lineTo(W * (u - 0.11 * sgn), H * 0.77);
+      g.lineTo(W * (u - 0.11 * sgn), H * 0.79);
+      g.lineTo(W * (u + 0.11 * sgn), H * 0.73);
+      g.closePath(); g.fill();
+    }
+
+    // Nombre del equipo en grande en los pontones
+    g.save();
+    g.fillStyle = '#ffffff';
+    g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = 6; g.shadowOffsetX = 2; g.shadowOffsetY = 2;
+    g.font = `900 ${W * 0.056}px "Titillium Web", Arial, sans-serif`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const u of [0.26, 0.74]) {
+      g.save();
+      g.translate(W * u, H * 0.52);
+      g.rotate(u < 0.5 ? Math.PI / 2 : -Math.PI / 2);
+      g.scale(-1, 1);
+      g.fillText(team.short, 0, 0);
+      g.restore();
+    }
     g.restore();
-    // número en el morro (arriba)
-    g.fillStyle = '#ffffff'; g.font = `900 ${W * 0.08}px "Titillium Web", Arial`; g.textAlign = 'center';
-    g.save(); g.translate(W * 0.5, H * 0.16); g.rotate(Math.PI / 2); g.fillText(String(num), 0, W * 0.025); g.restore();
+
+    // Patrocinadores técnicos secundarios en los pontones
+    const spIdx = Math.abs((team.id.charCodeAt(0) * 7 + (team.id.charCodeAt(1) || 0)) % SPONSORS.length);
+    const sp1 = SPONSORS[spIdx], sp2 = SPONSORS[(spIdx + 4) % SPONSORS.length];
+    g.save();
+    g.fillStyle = 'rgba(255,255,255,0.85)';
+    g.font = `800 ${W * 0.024}px "Titillium Web", Arial`;
+    g.textAlign = 'center';
+    for (const u of [0.26, 0.74]) {
+      g.save();
+      g.translate(W * u, H * 0.36);
+      g.rotate(u < 0.5 ? Math.PI / 2 : -Math.PI / 2);
+      g.scale(-1, 1);
+      g.fillText(sp1[0], 0, 0);
+      g.translate(0, W * 0.28);
+      g.fillText(sp2[0], 0, 0);
+      g.restore();
+    }
+    g.restore();
+
+    // Número del piloto en el morro (superior)
+    g.save();
+    g.translate(W * 0.5, H * 0.15);
+    g.rotate(Math.PI / 2);
+    // Placa porta-número estilizada
+    g.fillStyle = 'rgba(0,0,0,0.5)';
+    g.beginPath();
+    g.roundRect(-W * 0.07, -W * 0.05, W * 0.14, W * 0.10, 8);
+    g.fill();
+    g.strokeStyle = team.c3; g.lineWidth = 2; g.stroke();
+    // Número
+    g.fillStyle = '#ffffff';
+    g.font = `900 ${W * 0.08}px "Titillium Web", Arial`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(String(num), 0, 0);
+    g.restore();
+
+    // Número del piloto en los flancos de la aleta trasera
+    for (const u of [0.38, 0.62]) {
+      g.save();
+      g.translate(W * u, H * 0.78);
+      g.rotate(u < 0.5 ? Math.PI / 2 : -Math.PI / 2);
+      g.scale(-1, 1);
+      g.fillStyle = team.c2;
+      g.beginPath(); g.roundRect(-W * 0.05, -W * 0.04, W * 0.10, W * 0.08, 6); g.fill();
+      g.strokeStyle = team.c3; g.lineWidth = 1.5; g.stroke();
+      g.fillStyle = '#ffffff';
+      g.font = `900 ${W * 0.055}px "Titillium Web", Arial`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(String(num), 0, 0);
+      g.restore();
+    }
+
     const t = tex(c, false); return t;
   });
 }
@@ -230,15 +347,45 @@ export function livery(team, num) {
 export function tyreSide(color, blur = false) {
   return once('tyre' + color + blur, () => {
     const c = canvas(512, 512), g = c.getContext('2d');
-    g.fillStyle = '#16171a'; g.fillRect(0, 0, 512, 512);
-    // escala: el flanco va de r=0.232 a r≈0.35 del radio 0.36 -> anillos entre ~180 y ~245 px
-    g.strokeStyle = color; g.lineWidth = 12; g.beginPath(); g.arc(256, 256, 222, 0, 7); g.stroke();
-    g.lineWidth = 4; g.beginPath(); g.arc(256, 256, 200, 0, 7); g.stroke();
-    if (blur) { g.strokeStyle = 'rgba(230,230,230,0.35)'; g.lineWidth = 16; g.beginPath(); g.arc(256, 256, 236, 0, 7); g.stroke(); }
-    else {
-      g.fillStyle = '#f2f2f2'; g.font = '900 22px "Titillium Web", Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = '#141518'; g.fillRect(0, 0, 512, 512);
+
+    // Anillo exterior de caucho
+    g.strokeStyle = '#1d1f24'; g.lineWidth = 8;
+    g.beginPath(); g.arc(256, 256, 245, 0, Math.PI * 2); g.stroke();
+
+    // Banda de compuesto principal (vibrante)
+    g.strokeStyle = color; g.lineWidth = 14;
+    g.beginPath(); g.arc(256, 256, 222, 0, Math.PI * 2); g.stroke();
+
+    // Filetes de acento interior y exterior de la banda
+    g.strokeStyle = 'rgba(255,255,255,0.7)'; g.lineWidth = 2;
+    g.beginPath(); g.arc(256, 256, 229, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); g.arc(256, 256, 215, 0, Math.PI * 2); g.stroke();
+
+    // Anillo interior de unión con la llanta
+    g.strokeStyle = '#22252b'; g.lineWidth = 6;
+    g.beginPath(); g.arc(256, 256, 175, 0, Math.PI * 2); g.stroke();
+
+    if (blur) {
+      g.strokeStyle = 'rgba(240,240,240,0.35)'; g.lineWidth = 20;
+      g.beginPath(); g.arc(256, 256, 222, 0, Math.PI * 2); g.stroke();
+    } else {
+      g.fillStyle = '#f5f5f7'; g.font = '900 24px "Titillium Web", Arial, sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
       for (const a0 of [0, Math.PI]) {
-        const txt = 'GRIPTEC'; for (let k = 0; k < txt.length; k++) { g.save(); g.translate(256, 256); g.rotate(a0 + (k - 3) * 0.1); g.fillText(txt[k], 0, -238); g.restore(); }
+        const txt = 'GRIPTEC';
+        for (let k = 0; k < txt.length; k++) {
+          g.save(); g.translate(256, 256);
+          g.rotate(a0 + (k - 3) * 0.09);
+          g.fillText(txt[k], 0, -222);
+          g.restore();
+        }
+      }
+      // Marcas de código de barras / RFID en el flanco
+      g.fillStyle = 'rgba(255,255,255,0.6)';
+      for (let i = 0; i < 6; i++) {
+        g.fillRect(250 + (i % 2 ? 3 : 0), 65 + i * 4, 12, 2);
+        g.fillRect(250 + (i % 2 ? 3 : 0), 435 + i * 4, 12, 2);
       }
     }
     return tex(c, false);
@@ -247,22 +394,65 @@ export function tyreSide(color, blur = false) {
 
 export function wheelCover(teamColor) {
   return once('cover' + teamColor, () => {
-    const c = canvas(256, 256), g = c.getContext('2d');
-    g.fillStyle = '#1c1d20'; g.beginPath(); g.arc(128, 128, 128, 0, 7); g.fill();
-    g.fillStyle = '#2b2d31'; g.beginPath(); g.arc(128, 128, 110, 0, 7); g.fill();
-    g.strokeStyle = teamColor; g.lineWidth = 8; g.beginPath(); g.arc(128, 128, 96, 0.3, 2.2); g.stroke(); g.beginPath(); g.arc(128, 128, 96, 3.4, 5.3); g.stroke();
-    g.fillStyle = '#9aa0a6'; g.beginPath(); g.arc(128, 128, 20, 0, 7); g.fill();
-    g.fillStyle = '#111'; for (let i = 0; i < 5; i++) { const a = i * 1.2566; g.beginPath(); g.arc(128 + Math.cos(a) * 55, 128 + Math.sin(a) * 55, 8, 0, 7); g.fill(); }
+    const c = canvas(512, 512), g = c.getContext('2d');
+    // Fondo de carbono mate
+    g.fillStyle = '#16171a'; g.beginPath(); g.arc(256, 256, 256, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#222429'; g.beginPath(); g.arc(256, 256, 230, 0, Math.PI * 2); g.fill();
+
+    // Aletas / radios aerodinámicos de la llanta (10 álabes de flujo)
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      g.save();
+      g.translate(256, 256);
+      g.rotate(a);
+      g.fillStyle = i % 2 === 0 ? '#2d3038' : '#1b1c20';
+      g.beginPath();
+      g.moveTo(60, -10); g.lineTo(220, -22); g.lineTo(218, 12); g.lineTo(60, 6);
+      g.closePath(); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.12)'; g.lineWidth = 1.5; g.stroke();
+      g.restore();
+    }
+
+    // Anillo aerodinámico con color de equipo
+    g.strokeStyle = teamColor; g.lineWidth = 14;
+    g.beginPath(); g.arc(256, 256, 185, 0.2, 2.3); g.stroke();
+    g.beginPath(); g.arc(256, 256, 185, 3.3, 5.4); g.stroke();
+
+    g.strokeStyle = 'rgba(255,255,255,0.5)'; g.lineWidth = 2;
+    g.beginPath(); g.arc(256, 256, 194, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); g.arc(256, 256, 176, 0, Math.PI * 2); g.stroke();
+
+    // Centro / tuerca de bloqueo central de titanio anodizado
+    g.fillStyle = '#0f1012'; g.beginPath(); g.arc(256, 256, 56, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#8e96a0'; g.beginPath(); g.arc(256, 256, 42, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#b0b8c2'; g.beginPath(); g.arc(256, 256, 32, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#1c1e22'; g.beginPath(); g.arc(256, 256, 18, 0, Math.PI * 2); g.fill();
+
+    // 5 pines de bloqueo de rueda
+    g.fillStyle = '#111316';
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      g.beginPath(); g.arc(256 + Math.cos(a) * 110, 256 + Math.sin(a) * 110, 12, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,0.2)'; g.lineWidth = 2; g.stroke();
+    }
     return tex(c, false);
   });
 }
 
 export function carbon() {
   return once('carbon', () => {
-    const c = canvas(64, 64), g = c.getContext('2d');
-    g.fillStyle = '#1a1b1e'; g.fillRect(0, 0, 64, 64);
-    for (let y = 0; y < 64; y += 8) for (let x = 0; x < 64; x += 8) { g.fillStyle = ((x + y) / 8) % 2 ? '#24262a' : '#141518'; g.fillRect(x, y, 8, 4); g.fillRect(x + ((x / 8) % 2 ? 0 : 4), y + 4, 4, 4); }
-    const t = tex(c); t.repeat.set(6, 6); return t;
+    const c = canvas(128, 128), g = c.getContext('2d');
+    g.fillStyle = '#141518'; g.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 8) {
+      for (let x = 0; x < 128; x += 8) {
+        const alt = ((x + y) / 8) % 2;
+        g.fillStyle = alt ? '#22252a' : '#101113';
+        g.fillRect(x, y, 8, 4);
+        g.fillStyle = alt ? '#181a1e' : '#282b32';
+        g.fillRect(x + (alt ? 0 : 4), y + 4, 4, 4);
+      }
+    }
+    const t = tex(c); t.repeat.set(8, 8); return t;
   });
 }
 
@@ -270,7 +460,24 @@ export function helmet(color, accent) {
   return once('helm' + color + accent, () => {
     const c = canvas(256, 128), g = c.getContext('2d');
     g.fillStyle = color; g.fillRect(0, 0, 256, 128);
-    g.fillStyle = accent; g.fillRect(0, 50, 256, 12); g.fillRect(120, 0, 16, 128);
+    // Franjas de diseño de casco moderno
+    g.fillStyle = accent;
+    g.fillRect(0, 48, 256, 16);
+    g.beginPath();
+    g.moveTo(0, 80); g.lineTo(256, 110); g.lineTo(256, 128); g.lineTo(0, 98);
+    g.closePath(); g.fill();
+    // Banda superior y franja dorsal
+    g.fillStyle = '#111215';
+    g.fillRect(116, 0, 24, 128);
+    g.fillStyle = '#ffffff';
+    g.fillRect(124, 0, 8, 128);
+    // Tira de patrocinador en la visera
+    g.fillStyle = '#0a0a0c';
+    g.fillRect(0, 36, 256, 12);
+    g.fillStyle = '#ffffff';
+    g.font = '900 10px "Titillium Web", Arial';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('APEX RACING', 128, 42);
     return tex(c, false);
   });
 }
