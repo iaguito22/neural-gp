@@ -51,8 +51,8 @@ function hash(x) { const s = Math.sin(x * 127.1) * 43758.5453; return s - Math.f
 export function buildWorld(T, scene, renderer, quality = 'high') {
   const world = { update: () => {}, screens: [], lights: [], marshal: [], crews: [], overheads: [] };
   world.scene = scene;
-  const meta = T.meta || {}, night = !!meta.night, urban = !!meta.urban;
-  world.night = night; world.urban = urban;
+  const meta = T.meta || {}, night = !!meta.night, urban = !!meta.urban, sunset = !!meta.sunset;
+  world.night = night; world.urban = urban; world.sunset = sunset;
   const STEP = 2;
   const M = Math.floor(T.L / STEP);
   const P = [0, 0, 0];
@@ -267,6 +267,12 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
       return 9 * Math.pow(0.5 + 0.5 * Math.sin(u * 0.006 + Math.sin(z * 0.002) * 2), 2) + 4 * Math.sin(x * 0.011 - z * 0.007) + 1.2 * Math.sin(u * 0.05)
         + Math.max(0, r - 1300) * 0.05;
     }
+    if (sunset) {
+      // montaña: relieve alpino que asciende en laderas y macizos
+      return 46 * (0.5 + 0.5 * Math.sin(x * 0.0028 + 1.1) * Math.cos(z * 0.0022 - 0.4))
+        + 22 * Math.sin(x * 0.0065 + z * 0.0045) + 10 * Math.sin(x * 0.016 - z * 0.013)
+        + Math.max(0, r - 850) * 0.16 * (0.7 + 0.3 * Math.sin(Math.atan2(z - ccz, x - ccx) * 4));
+    }
     return 30 * (0.5 + 0.5 * Math.sin(x * 0.0024 + 1.3) * Math.cos(z * 0.0019 - 0.4)) + 16 * Math.sin(x * 0.0061 + z * 0.0043) + 5 * Math.sin(x * 0.019 - z * 0.014)
       + Math.max(0, r - 1250) * 0.11 * (0.7 + 0.3 * Math.sin(Math.atan2(z - ccz, x - ccx) * 5));
   };
@@ -317,6 +323,19 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
         const lit = 0.18 + 0.82 * Math.exp(-Math.max(0, dT - 30) / 220);
         const sandC = [0.78, 0.62, 0.42];
         for (let k = 0; k < 3; k++) col[i * 3 + k] = Math.pow(sandC[k] * jit * (0.9 + 0.1 * Math.sin(x * 0.05)), 2.2) * 1.45 * lit;
+      } else if (sunset) {
+        // montaña al atardecer: verde alpino en cotas bajas, transición a roca parda y canchales
+        const alpine = [0.25, 0.36, 0.18];
+        const rock = [0.46, 0.41, 0.36];
+        const highRock = [0.54, 0.49, 0.44];
+        const alt = Math.min(1, Math.max(0, (y - 18) / 55));
+        const rCol = alt > 0.65 ? highRock : rock;
+        const base = [
+          alpine[0] * (1 - alt) + rCol[0] * alt,
+          alpine[1] * (1 - alt) + rCol[1] * alt,
+          alpine[2] * (1 - alt) + rCol[2] * alt,
+        ];
+        for (let k = 0; k < 3; k++) col[i * 3 + k] = Math.pow(base[k] * jit, 2.2) * 1.35;
       } else
       for (let k = 0; k < 3; k++) col[i * 3 + k] = Math.pow((lush[k] * (1 - w) + f[k] * w * (w > 0.5 ? edge : 1)) * jit * (y > 60 ? 0.9 : 1), 2.2) * 1.45;
     }
@@ -700,6 +719,19 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
     scene.environmentIntensity = 0.8;
     world.hemi = new THREE.HemisphereLight(0xaab8ff, 0x3b3226, 0.95); scene.add(world.hemi);
     sun = new THREE.DirectionalLight(0xf4f6ff, 3.1);
+  } else if (sunset) {
+    // atardecer en la montaña: sol bajo (~10° elevación), cielo naranja/rosado hacia el sol y azul violáceo al otro lado,
+    // sombras largas, niebla cálida suave en la distancia, luz hemisférica cálida
+    sunDir.setFromSphericalCoords(1, THREE.MathUtils.degToRad(80), THREE.MathUtils.degToRad(225));
+    scene.fog = new THREE.Fog(0xd49b82, 1200, 9000);
+    const envScene = new THREE.Scene(); const sky2 = new Sky(); sky2.scale.setScalar(1000); envScene.add(sky2);
+    su.turbidity.value = 6.0; su.rayleigh.value = 4.0; su.mieCoefficient.value = 0.02; su.mieDirectionalG.value = 0.82;
+    Object.assign(sky2.material.uniforms.sunPosition.value, sunDir);
+    for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'mieDirectionalG']) sky2.material.uniforms[k].value = su[k].value;
+    scene.environment = pm.fromScene(envScene, 0.03).texture;
+    scene.environmentIntensity = 0.7;
+    const hemi = world.hemi = new THREE.HemisphereLight(0xffb896, 0x483e34, 0.65); scene.add(hemi);
+    sun = new THREE.DirectionalLight(0xffa868, 2.5);
   } else {
     scene.fog = new THREE.Fog(0xaec8de, 1100, 6500);
     const envScene = new THREE.Scene(); const sky2 = new Sky(); sky2.scale.setScalar(1000); envScene.add(sky2);

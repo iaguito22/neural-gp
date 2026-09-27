@@ -402,3 +402,359 @@ export function buildNight(ctx) {
   }
   ctx.nightLit = lit;
 }
+
+// ------------------------------------------------------------------ Monte Alto: cordillera alpina, bosque de coníferas, chalets y taludes
+export function buildMountain(ctx) {
+  const { T, world, scene, G, r, quality } = ctx;
+  const bb = world.bb;
+  const ccx = (bb.x0 + bb.x1) / 2, ccz = (bb.z0 + bb.z1) / 2;
+  const fits = makeFits(T, world, ctx);
+
+  // 1) CORDILLERA LEJANA: Anillo montañoso alpino con crestas rocosas y cumbres nevadas
+  {
+    const rings = 12, sectors = 144;
+    const rMin = 1450, rMax = 7200;
+    const geo = new THREE.BufferGeometry();
+    const pos = [], uvs = [], cols = [], idx = [];
+
+    const mH = (angle, dist) => {
+      const a1 = Math.sin(angle * 3 + 1.2) * 0.5 + 0.5;
+      const a2 = Math.sin(angle * 7 - 0.8) * 0.5 + 0.5;
+      const a3 = Math.cos(angle * 13 + 2.3) * 0.5 + 0.5;
+      const a4 = Math.sin(angle * 29 + 0.5) * 0.5 + 0.5;
+      const a5 = Math.cos(angle * 43) * 0.5 + 0.5;
+      const raw = a1 * 0.35 + a2 * 0.28 + a3 * 0.18 + a4 * 0.12 + a5 * 0.07;
+      const t = Math.max(0, Math.min(1, (dist - rMin) / (rMax - rMin)));
+      const rCurve = Math.sin(t * Math.PI);
+      const peakH = 680 * Math.pow(raw, 1.5) + 200 * a2;
+      return rCurve * peakH + (dist > 2800 ? (dist - 2800) * 0.05 : 0);
+    };
+
+    for (let j = 0; j <= rings; j++) {
+      const fj = j / rings;
+      const dist = rMin + fj * (rMax - rMin);
+      for (let i = 0; i <= sectors; i++) {
+        const fi = i / sectors;
+        const angle = fi * Math.PI * 2;
+        const x = ccx + Math.cos(angle) * dist;
+        const z = ccz + Math.sin(angle) * dist;
+        const gy = G(x, z);
+        const y = Math.max(gy, mH(angle, dist));
+
+        pos.push(x, y, z);
+        uvs.push(x / 400, z / 400);
+
+        let cr, cg, cb;
+        if (y < 80) {
+          cr = 0.22; cg = 0.34; cb = 0.18;
+        } else if (y < 200) {
+          const f = (y - 80) / 120;
+          cr = 0.22 + f * 0.26; cg = 0.34 + f * 0.10; cb = 0.18 + f * 0.20;
+        } else if (y < 340) {
+          const f = (y - 200) / 140;
+          cr = 0.48 + f * 0.16; cg = 0.44 + f * 0.16; cb = 0.38 + f * 0.22;
+        } else {
+          const f = Math.min(1, (y - 340) / 120);
+          cr = 0.64 + f * 0.32; cg = 0.60 + f * 0.35; cb = 0.60 + f * 0.38;
+        }
+        cols.push(cr, cg, cb);
+      }
+    }
+
+    const stride = sectors + 1;
+    for (let j = 0; j < rings; j++) {
+      for (let i = 0; i < sectors; i++) {
+        const a = j * stride + i;
+        const b = (j + 1) * stride + i;
+        const c = (j + 1) * stride + (i + 1);
+        const d = j * stride + (i + 1);
+        idx.push(a, b, d);
+        idx.push(b, c, d);
+      }
+    }
+
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+
+    const mountainMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.92,
+      flatShading: true,
+    });
+    const mountainMesh = new THREE.Mesh(geo, mountainMat);
+    mountainMesh.receiveShadow = true;
+    scene.add(mountainMesh);
+  }
+
+  // 2) PICOS ALPINOS EMBLEMÁTICOS (Hero Peaks piramidales con cumbres nevadas)
+  {
+    const heroPeakAngles = [0.35, 1.25, 2.15, 3.45, 4.40, 5.55];
+    const heroDists = [2500, 2900, 2400, 3000, 2600, 2700];
+    const heroHeights = [780, 890, 720, 840, 760, 920];
+    const heroRadii = [650, 780, 620, 720, 680, 800];
+
+    const coneMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.88,
+      flatShading: true,
+    });
+
+    for (let k = 0; k < heroPeakAngles.length; k++) {
+      const a = heroPeakAngles[k], d = heroDists[k], H = heroHeights[k], R = heroRadii[k];
+      const px = ccx + Math.cos(a) * d, pz = ccz + Math.sin(a) * d;
+      const baseGeo = new THREE.ConeGeometry(R, H, 8, 10);
+      baseGeo.translate(0, H / 2, 0);
+
+      const pArr = baseGeo.attributes.position;
+      const colArr = new Float32Array(pArr.count * 3);
+      for (let i = 0; i < pArr.count; i++) {
+        let vx = pArr.getX(i), vy = pArr.getY(i), vz = pArr.getZ(i);
+        const nh = hash(vx * 0.015 + vz * 0.025);
+        if (vy < H * 0.96 && vy > 10) {
+          vx += (nh - 0.5) * R * 0.28;
+          vz += (hash(vz * 0.02 + vy * 0.01) - 0.5) * R * 0.28;
+        }
+        pArr.setXYZ(i, vx, vy, vz);
+
+        if (vy > H * 0.44) {
+          colArr[i * 3] = 0.96; colArr[i * 3 + 1] = 0.95; colArr[i * 3 + 2] = 0.98;
+        } else if (vy > H * 0.18) {
+          const f = (vy - H * 0.18) / (H * 0.26);
+          colArr[i * 3] = 0.44 + f * 0.42;
+          colArr[i * 3 + 1] = 0.40 + f * 0.45;
+          colArr[i * 3 + 2] = 0.36 + f * 0.52;
+        } else {
+          colArr[i * 3] = 0.22; colArr[i * 3 + 1] = 0.32; colArr[i * 3 + 2] = 0.18;
+        }
+      }
+      baseGeo.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
+      baseGeo.computeVertexNormals();
+
+      const peakMesh = new THREE.Mesh(baseGeo, coneMat);
+      peakMesh.position.set(px, G(px, pz) - 20, pz);
+      peakMesh.rotation.y = a * 2.5;
+      peakMesh.receiveShadow = true;
+      scene.add(peakMesh);
+    }
+  }
+
+  // 3) TALUDES Y ROCAS JUNTO A LA PISTA Y EN LADERAS
+  {
+    const rockGeo1 = new THREE.IcosahedronGeometry(1.6, 0);
+    const rockGeo2 = new THREE.DodecahedronGeometry(2.2, 0);
+    const rockMat = new THREE.MeshStandardMaterial({
+      color: 0x645e56,
+      roughness: 0.95,
+      flatShading: true,
+    });
+
+    const rocks = [];
+    for (let s = 10; s < T.L; s += 16) {
+      const i = T.idx(s);
+      const ty = T.y[i];
+      for (const side of [1, -1]) {
+        const B = world.barrier(s, side);
+        const pEdge = [0, 0, 0];
+        T.pos(s, side * (B + 7), pEdge);
+        const gy = G(pEdge[0], pEdge[2]);
+        const diff = gy - ty;
+        if (diff > 1.2 || (Math.abs(T.k[i]) > 1 / 180 && hash(s + side) < 0.65)) {
+          const numRocks = 2 + Math.floor(hash(s * 3.1) * 3);
+          for (let nr = 0; nr < numRocks; nr++) {
+            const rDist = B + 3.5 + nr * 4.2 + hash(s + nr) * 3;
+            const rPos = [0, 0, 0];
+            T.pos(s + (nr - 1) * 3.5, side * rDist, rPos);
+            const rgy = G(rPos[0], rPos[2]);
+            const rScale = 1.4 + hash(s * 7.7 + nr) * 2.2 + Math.max(0, diff * 0.4);
+            rocks.push([rPos[0], rgy - 0.4, rPos[2], rScale, hash(s + nr * 13) * 6, nr % 2]);
+          }
+        }
+      }
+    }
+
+    const nScattered = quality === 'low' ? 300 : 700;
+    for (let t = 0; t < nScattered * 3 && rocks.length < nScattered + 500; t++) {
+      const rx = bb.x0 - 400 + r() * (bb.x1 - bb.x0 + 800);
+      const rz = bb.z0 - 400 + r() * (bb.z1 - bb.z0 + 800);
+      const td = world.trackDist(rx, rz);
+      if (td > 25 && ctx.occ.every((o) => Math.hypot(o.x - rx, o.z - rz) > o.r + 3)) {
+        const rgy = G(rx, rz);
+        const rScale = 1.2 + r() * 3.8;
+        rocks.push([rx, rgy - 0.3, rz, rScale, r() * 6.28, r() < 0.5 ? 0 : 1]);
+      }
+    }
+
+    const r1List = rocks.filter((rk) => rk[5] === 0);
+    const r2List = rocks.filter((rk) => rk[5] === 1);
+    const col = new THREE.Color();
+    const rockTints = [0x5c564f, 0x6e675e, 0x4f4942, 0x7a7268, 0x605952];
+
+    const mkRocks = (geo, list) => {
+      if (!list.length) return;
+      const im = new THREE.InstancedMesh(geo, rockMat, list.length);
+      list.forEach(([rx, ry, rz, rs, ryaw], k) => {
+        m4.compose(v.set(rx, ry, rz), q.setFromAxisAngle(Y, ryaw), sc.set(rs * (0.8 + hash(rx) * 0.4), rs * (0.7 + hash(rz) * 0.6), rs * (0.8 + hash(rx + rz) * 0.4)));
+        im.setMatrixAt(k, m4);
+        im.setColorAt(k, col.setHex(rockTints[Math.floor(hash(rx * 3.3 + rz) * rockTints.length)]));
+      });
+      im.castShadow = true;
+      im.receiveShadow = true;
+      scene.add(im);
+    };
+    mkRocks(rockGeo1, r1List);
+    mkRocks(rockGeo2, r2List);
+  }
+
+  // 4) BOSQUE DENSO DE PINOS DE MONTAÑA
+  {
+    const nTrees = quality === 'low' ? 4500 : 9500;
+    const pineCrown1 = new THREE.ConeGeometry(2.5, 7.5, 7); pineCrown1.translate(0, 5.5, 0);
+    const pineCrown2 = new THREE.ConeGeometry(1.8, 5.0, 7); pineCrown2.translate(0, 9.0, 0);
+    const pineTrunk = new THREE.CylinderGeometry(0.24, 0.38, 3.2, 5); pineTrunk.translate(0, 1.6, 0);
+
+    const pineMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.95,
+      flatShading: true,
+    });
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x423224,
+      roughness: 1,
+    });
+
+    const treePts = [];
+    const x0 = bb.x0 - 1100, x1 = bb.x1 + 1100, z0 = bb.z0 - 1100, z1 = bb.z1 + 1100;
+    let tries = 0;
+
+    const mDens = (x, z) => {
+      const d1 = Math.sin(x * 0.0035 + 1.2) * Math.cos(z * 0.0028);
+      const d2 = Math.sin(x * 0.008 + z * 0.007) * 0.5;
+      const d3 = Math.sin(x * 0.02 - z * 0.015) * 0.3;
+      return 0.5 + d1 * 0.4 + d2 + d3;
+    };
+
+    while (treePts.length < nTrees && tries < nTrees * 30) {
+      tries++;
+      const x = x0 + r() * (x1 - x0), z = z0 + r() * (z1 - z0);
+      const dn = mDens(x, z);
+      if (dn < 0.25 && r() < 0.9) continue;
+      if (!ctx.clearOfTrack?.(x, z, 3.5) && !fits(x, z, 3.5, 3.5, 0, 3.5)) continue;
+      if (!ctx.occ.every((o) => Math.hypot(o.x - x, o.z - z) > o.r + 3.5)) continue;
+      treePts.push([x, G(x, z) - 0.2, z, r()]);
+    }
+
+    for (let s = 0; s < T.L; s += 10) {
+      for (const side of [1, -1]) {
+        const B = world.barrier(s, side);
+        const p = [0, 0, 0];
+        T.pos(s, side * (B + 10 + hash(s * 2.1) * 8), p);
+        if (fits(p[0], p[2], 3, 3, 0, 3) && ctx.occ.every((o) => Math.hypot(o.x - p[0], o.z - p[2]) > o.r + 3)) {
+          treePts.push([p[0], G(p[0], p[2]) - 0.2, p[2], hash(s + side)]);
+        }
+      }
+    }
+
+    const imC1 = new THREE.InstancedMesh(pineCrown1, pineMat, treePts.length);
+    const imC2 = new THREE.InstancedMesh(pineCrown2, pineMat, treePts.length);
+    const imTrk = new THREE.InstancedMesh(pineTrunk, trunkMat, treePts.length);
+    const col = new THREE.Color();
+
+    treePts.forEach(([tx, ty, tz, seed], k) => {
+      const s = 0.75 + ((seed * 7.13) % 1) * 0.85;
+      const sy = s * (0.9 + ((seed * 3.7) % 1) * 0.4);
+      q.setFromAxisAngle(Y, seed * 40);
+      sc.set(s, sy, s);
+      v.set(tx, ty, tz);
+      m4.compose(v, q, sc);
+      imC1.setMatrixAt(k, m4);
+      imC2.setMatrixAt(k, m4);
+      imTrk.setMatrixAt(k, m4);
+
+      col.setHSL(0.33 + ((seed * 11.3) % 1) * 0.05, 0.58, 0.05 + ((seed * 5.7) % 1) * 0.04);
+      imC1.setColorAt(k, col);
+      col.setHSL(0.33 + ((seed * 11.3) % 1) * 0.05, 0.58, 0.065 + ((seed * 5.7) % 1) * 0.04);
+      imC2.setColorAt(k, col);
+    });
+
+    imC1.castShadow = true;
+    imC2.castShadow = true;
+    scene.add(imC1, imC2, imTrk);
+  }
+
+  // 5) PUEBLO DE MONTAÑA / CASAS ALPINAS (Chalets con tejados a dos aguas e iglesia alpina)
+  {
+    const villageCenters = [
+      { x: bb.x0 + (bb.x1 - bb.x0) * 0.28, z: bb.z0 + (bb.z1 - bb.z0) * 0.38, n: 16 },
+      { x: bb.x0 + (bb.x1 - bb.x0) * 0.72, z: bb.z0 + (bb.z1 - bb.z0) * 0.65, n: 10 },
+    ];
+
+    const chalets = [];
+    const bldMat = new THREE.MeshStandardMaterial({ color: 0x8a7258, roughness: 0.85 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x3e352e, roughness: 0.8, side: THREE.DoubleSide });
+    const winMat = new THREE.MeshStandardMaterial({ color: 0x221105, emissive: 0xffaa44, emissiveIntensity: 1.2, roughness: 0.3 });
+
+    villageCenters.forEach((vc) => {
+      for (let t = 0; t < vc.n * 8 && chalets.length < vc.n * 2; t++) {
+        const cx = vc.x + (r() - 0.5) * 280, cz = vc.z + (r() - 0.5) * 260;
+        const w = 11 + r() * 5, d = 9 + r() * 4, h = 6.5 + r() * 3.5;
+        const yaw = r() * Math.PI * 2;
+        if (fits(cx, cz, w + 4, d + 4, yaw, 8)) {
+          const cy = G(cx, cz);
+          chalets.push({ x: cx, y: cy, z: cz, w, d, h, yaw });
+          ctx.claim(cx, cz, Math.hypot(w, d) / 2 + 2);
+          world.addOccluder(cx, cz, w / 2, d / 2, yaw, cy - 1, cy + h + 4);
+        }
+      }
+    });
+
+    if (chalets.length) {
+      const houseBase = new THREE.BoxGeometry(1, 1, 1); houseBase.translate(0, 0.5, 0);
+      const houseRoof = new THREE.ConeGeometry(0.75, 0.45, 4); houseRoof.rotateY(Math.PI / 4); houseRoof.translate(0, 0.225, 0);
+
+      const imB = new THREE.InstancedMesh(houseBase, bldMat, chalets.length);
+      const imR = new THREE.InstancedMesh(houseRoof, roofMat, chalets.length);
+      const bCol = new THREE.Color();
+      const wallColors = [0x8b6c4c, 0x9c7d5c, 0x74593f, 0x6e5e50, 0xa5896a];
+
+      chalets.forEach((ch, k) => {
+        m4.compose(v.set(ch.x, ch.y, ch.z), q.setFromAxisAngle(Y, ch.yaw), sc.set(ch.w, ch.h, ch.d));
+        imB.setMatrixAt(k, m4);
+        imB.setColorAt(k, bCol.setHex(wallColors[k % wallColors.length]));
+
+        m4.compose(v.set(ch.x, ch.y + ch.h, ch.z), q.setFromAxisAngle(Y, ch.yaw), sc.set(ch.w * 1.15, ch.h * 0.7, ch.d * 1.15));
+        imR.setMatrixAt(k, m4);
+      });
+
+      imB.castShadow = true; imB.receiveShadow = true;
+      imR.castShadow = true; imR.receiveShadow = true;
+      scene.add(imB, imR);
+
+      if (chalets[0]) {
+        const ch0 = chalets[0];
+        const churchGrp = new THREE.Group();
+        const churchStone = new THREE.MeshStandardMaterial({ color: 0xd4cec4, roughness: 0.9 });
+        const nave = new THREE.Mesh(new THREE.BoxGeometry(14, 10, 24), churchStone);
+        nave.position.set(0, 5, 0); churchGrp.add(nave);
+        const nRoof = new THREE.Mesh(new THREE.ConeGeometry(11, 6, 4), roofMat);
+        nRoof.rotateY(Math.PI / 4); nRoof.scale.set(1.1, 1, 1.8); nRoof.position.set(0, 13, 0); churchGrp.add(nRoof);
+        const tower = new THREE.Mesh(new THREE.BoxGeometry(6, 26, 6), churchStone);
+        tower.position.set(0, 13, 15); churchGrp.add(tower);
+        const spire = new THREE.Mesh(new THREE.ConeGeometry(4.2, 16, 4), roofMat);
+        spire.rotateY(Math.PI / 4); spire.position.set(0, 34, 15); churchGrp.add(spire);
+        const win1 = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 3.2), winMat);
+        win1.position.set(7.05, 5, 0); win1.rotation.y = Math.PI / 2; churchGrp.add(win1);
+        const win2 = win1.clone(); win2.position.set(-7.05, 5, 0); win2.rotation.y = -Math.PI / 2; churchGrp.add(win2);
+
+        churchGrp.position.set(ch0.x + 35, ch0.y, ch0.z + 20);
+        churchGrp.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
+        scene.add(churchGrp);
+        world.addOccluder(ch0.x + 35, ch0.z + 20, 6, 12, 0, ch0.y - 1, ch0.y + 42);
+      }
+    }
+  }
+}
+
+

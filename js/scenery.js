@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import * as TX from './textures.js';
 import { TEAMS } from './teams.js';
 import { HALF_W, between } from './track.js';
-import { buildUrban, buildNight } from './decor.js';
+import { buildUrban, buildNight, buildMountain } from './decor.js';
 
 function rng(seed) { let a = seed >>> 0; return () => { a = (a * 1664525 + 1013904223) >>> 0; return a / 4294967296; }; }
 const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), v = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0);
@@ -24,15 +24,16 @@ export function buildScenery(T, scene, world, quality, sunDir) {
   const free = (x, z, rad) => clearOfTrack(x, z, rad) && occ.every((o) => Math.hypot(o.x - x, o.z - z) > o.r + rad);
   const claim = (x, z, rad) => occ.push({ x, z, r: rad });
   const out = { update: () => {} };
-  const night = !!world.night, urban = !!world.urban, rural = !night && !urban;
+  const night = !!world.night, urban = !!world.urban, sunset = !!world.sunset;
+  const rural = !night && !urban && !sunset;
 
   // -------------------------------------------------------------- cielo
   {
     const dome = new THREE.Mesh(new THREE.SphereGeometry(9000, 32, 16), new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { sun: { value: sunDir.clone() }, night: { value: night ? 1 : 0 }, cloud: { value: 0 } },
+      uniforms: { sun: { value: sunDir.clone() }, night: { value: night ? 1 : 0 }, sunset: { value: sunset ? 1 : 0 }, cloud: { value: 0 } },
       vertexShader: 'varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-      fragmentShader: `varying vec3 vDir; uniform vec3 sun; uniform float night; uniform float cloud;
+      fragmentShader: `varying vec3 vDir; uniform vec3 sun; uniform float night; uniform float sunset; uniform float cloud;
         float h3(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
         void main(){
           if (night > 0.5) {
@@ -47,6 +48,30 @@ export function buildScenery(T, scene, world, quality, sunDir) {
             if (vDir.y < 0.0) c = vec3(0.02, 0.018, 0.02);
             // nublado: tapa estrellas y luna; las nubes bajas reflejan algo de la luz de la ciudad
             c = mix(c, vec3(0.045, 0.043, 0.05) + vec3(0.06, 0.045, 0.03) * pow(1.0 - hh, 3.0), cloud * 0.92);
+            gl_FragColor = vec4(c, 1.0);
+            #include <tonemapping_fragment>
+            #include <colorspace_fragment>
+            return;
+          }
+          if (sunset > 0.5) {
+            // atardecer en la montaña: cielo naranja-rosado hacia el sol y azul violáceo al otro lado
+            float h = max(vDir.y, 0.0);
+            vec3 zen = vec3(0.12, 0.15, 0.38);
+            vec3 horSun = vec3(0.96, 0.48, 0.22);
+            vec3 horAnti = vec3(0.55, 0.36, 0.54);
+            vec3 gnd = vec3(0.18, 0.14, 0.16);
+            float s = dot(vDir, normalize(sun));
+            float sWeight = 0.5 + 0.5 * s;
+            vec3 hor = mix(horAnti, horSun, pow(sWeight, 1.3));
+            vec3 c = mix(hor, zen, pow(h, 0.42));
+            if (vDir.y < 0.0) c = mix(hor, gnd, min(1.0, -vDir.y * 5.0));
+            float sPos = max(s, 0.0);
+            vec3 sunDisc = vec3(1.0, 0.88, 0.60) * pow(sPos, 600.0) * 7.0;
+            vec3 sunGlow = vec3(1.0, 0.50, 0.18) * pow(sPos, 14.0) * 1.6 + vec3(0.95, 0.28, 0.20) * pow(sPos, 3.2) * 0.4;
+            c += (sunDisc + sunGlow) * (1.0 - cloud);
+            vec3 ov = mix(vec3(0.44, 0.38, 0.42), vec3(0.24, 0.22, 0.28), pow(h, 0.6));
+            if (vDir.y < 0.0) ov = vec3(0.22, 0.20, 0.22);
+            c = mix(c, ov, cloud);
             gl_FragColor = vec4(c, 1.0);
             #include <tonemapping_fragment>
             #include <colorspace_fragment>
@@ -76,7 +101,11 @@ export function buildScenery(T, scene, world, quality, sunDir) {
       g.fillStyle = gr; g.beginPath(); g.arc(x, y, rr, 0, 7); g.fill();
     }
     const ctex = new THREE.CanvasTexture(cv); ctex.colorSpace = THREE.SRGBColorSpace;
-    const cmat = new THREE.SpriteMaterial({ map: ctex, transparent: true, depthWrite: false, fog: false, opacity: 0.9 });
+    const cmat = new THREE.SpriteMaterial({
+      map: ctex, transparent: true, depthWrite: false, fog: false,
+      opacity: sunset ? 0.82 : 0.9,
+      color: sunset ? new THREE.Color(0xffb08a) : new THREE.Color(0xffffff),
+    });
     out.cloudMat = cmat;
     const cx = (world.bb.x0 + world.bb.x1) / 2, cz = (world.bb.z0 + world.bb.z1) / 2;
     for (let i = 0; i < (night ? 0 : 46); i++) {
@@ -169,10 +198,11 @@ export function buildScenery(T, scene, world, quality, sunDir) {
     tryLot(T.wrap(cn(7).sIn), -Math.sign(cn(7).dir) || 1, 60, 140, 70);
     tryLot(T.wrap(cn(11).apex), -Math.sign(cn(11).dir) || 1, 70, 120, 80);
   }
-  // decorado propio del circuito (ciudad y puerto / focos y desierto)
-  const ctx = { T, world, scene, G, r, quality, occ, claim, night };
+  // decorado propio del circuito (ciudad y puerto / focos y desierto / montaña al atardecer)
+  const ctx = { T, world, scene, G, r, quality, occ, claim, night, sunset, clearOfTrack };
   if (urban) buildUrban(ctx);
   if (night) buildNight(ctx);
+  if (sunset) buildMountain(ctx);
   {
     const colors = [0xd32f2f, 0x1976d2, 0xfafafa, 0x212121, 0x9e9e9e, 0x388e3c, 0xfbc02d, 0x5d4037, 0x90a4ae, 0x0d47a1];
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.35, metalness: 0.5 });
@@ -222,7 +252,7 @@ export function buildScenery(T, scene, world, quality, sunDir) {
       beach.scale.copy(lake.scale); beach.rotation.x = -Math.PI / 2; beach.position.set(best[0], y + 0.3, best[1]); scene.add(beach);
       claim(best[0], best[1], rad + 10);
     }
-    for (let t = 0; t < (night ? 0 : 300); t++) {
+    for (let t = 0; t < (night || sunset ? 0 : 300); t++) {
       const x = world.bb.x0 + r() * (world.bb.x1 - world.bb.x0), z = world.bb.z0 + r() * (world.bb.z1 - world.bb.z0);
       if (!free(x, z, 40)) continue;
       claim(x, z, 40);
