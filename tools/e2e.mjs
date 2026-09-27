@@ -75,7 +75,7 @@ check('R abre repetición', await ev(() => window.__app.replay.active));
 const rt = await ev(() => window.__sim.t); await p.waitForTimeout(800);
 check('repetición congela la sim', Math.abs((await ev(() => window.__sim.t)) - rt) < 0.05);
 await click('#replayBar button[data-a="slow"]'); check('cámara lenta', await ev(() => window.__app.replay.rate < 1));
-await click('#replayBar button[data-a="live"]'); check('volver al directo', await ev(() => !window.__app.replay.active));
+await click('#replayBar button[data-a="live"]'); await p.waitForTimeout(800); check('volver al directo', await ev(() => !window.__app.replay.active));
 
 // --- fin de semana entero con «Saltar»
 for (const want of ['FP', 'Q1', 'Q2', 'Q3', 'RACE']) {

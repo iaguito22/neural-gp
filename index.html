@@ -219,6 +219,14 @@ body.mgr #feed, body.mgr #tele { display: none; }
 #replayBar .prog { width: 120px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; overflow: hidden; } #replayBar .prog i { display: block; height: 100%; background: #fff; }
 #replayBar button { border: 0; border-radius: 6px; padding: 6px 10px; font: 700 12px 'Titillium Web', sans-serif; background: rgba(255,255,255,0.1); color: #fff; cursor: pointer; }
 #replayBar button:hover { background: rgba(255,255,255,0.2); }
+#wipe { position: fixed; inset: 0; z-index: 60; pointer-events: none; overflow: hidden; display: none; }
+#wipe.go { display: block; }
+#wipe i { position: absolute; top: -10%; bottom: -10%; left: -25%; width: 150%; transform: translateX(-140%) skewX(-14deg); }
+#wipe .a { background: var(--red); animation: wipe 1s cubic-bezier(.7,0,.3,1) forwards; }
+#wipe .b { background: #0c0c12; animation: wipe 1s cubic-bezier(.7,0,.3,1) 0.07s forwards; display: grid; place-items: center; }
+#wipe .b span { transform: skewX(14deg); display: flex; align-items: center; gap: 16px; font-weight: 900; font-size: 44px; letter-spacing: 0.16em; color: #fff; }
+#wipe .b em { font-style: normal; background: var(--red); font-size: 22px; letter-spacing: 0.04em; padding: 8px 12px; border-radius: 8px; }
+@keyframes wipe { 0% { transform: translateX(-140%) skewX(-14deg); } 36%, 52% { transform: translateX(0) skewX(-14deg); } 100% { transform: translateX(140%) skewX(-14deg); } }
 body.replay #sessionBar, body.replay #radio, body.replay #battle, body.replay #qlive { visibility: hidden; }
 /* pantalla de inicio */
 body.menu #hud, body.menu #view { display: none; }

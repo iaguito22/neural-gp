@@ -21,6 +21,19 @@ export class Replay {
       if (a === 'live') this.stop(); else if (a === 'slow') { this.rate = this.rate === 1 ? 0.4 : 1; this.drawBar(); }
     });
     sim.on((e) => this.onEvent(e));
+    const w = this.wipeEl = document.createElement('div'); w.id = 'wipe';
+    w.innerHTML = '<i class="a"></i><i class="b"><span><em>NGP</em><b></b></span></i>';
+    document.body.appendChild(w);
+  }
+
+  // cortinilla de TV: el cambio (fn) ocurre cuando la banda tapa la pantalla
+  wipe(label, fn) {
+    if (this.app.skipping || document.hidden) { fn(); return; }
+    this.wiping = true;
+    const w = this.wipeEl; w.querySelector('b').textContent = label;
+    w.classList.remove('go'); void w.offsetWidth; w.classList.add('go');
+    setTimeout(fn, 400);
+    setTimeout(() => { w.classList.remove('go'); this.wiping = false; }, 1000);
   }
 
   // --- grabación
@@ -66,9 +79,14 @@ export class Replay {
 
   // --- reproducir
   start(car, t0, t1, why = '') {
-    if (this.active || this.count < 10) return false;
+    if (this.active || this.wiping || this.count < 10) return false;
     t0 = Math.max(this.oldest(), t0); t1 = Math.min(this.newest(), t1);
     if (t1 - t0 < 2) return false;
+    this.wipe('REPETICIÓN', () => this.begin(car, t0, t1, why));
+    return true;
+  }
+  begin(car, t0, t1, why) {
+    if (this.active) return;
     const D = this.dir;
     this.saved = this.sim.cars.map((c) => { const o = {}; for (const f of NUM) o[f] = c[f]; Object.assign(o, { drs: c.drs, state: c.state, inPit: c.inPit, pitPhase: c.pitPhase, mistake: c.mistake, out: c.out, tc: c.tyre.c }); return o; });
     this.savedDir = { auto: D.auto, type: D.type, focus: D.focus };
@@ -77,11 +95,14 @@ export class Replay {
     D.auto = false; D.setFocus(car, false);
     this.bar.classList.add('on'); this.drawBar();
     document.body.classList.add('replay');
-    return true;
   }
   replayLast(car, secs = 12) { return this.start(car || this.dir.focus, this.newest() - secs, this.newest(), 'manual'); }
 
   stop() {
+    if (!this.active || this.wiping) return;
+    this.wipe('EN DIRECTO', () => this.end());
+  }
+  end() {
     if (!this.active) return;
     this.sim.cars.forEach((c, i) => {
       const o = this.saved[i];
@@ -114,7 +135,7 @@ export class Replay {
       if (!this.active) return false;
     }
     this.t += dt * this.rate;
-    if (this.t >= this.t1) { this.stop(); return false; }
+    if (this.t >= this.t1) { this.stop(); return this.active; }   // (tras la cortinilla)
     // cambio de plano cada ~3 s
     this.shotT -= dt;
     if (this.shotT <= 0) { this.shot = (this.shot + 1) % this.shots.length; this.shotT = 3.2; this.dir.type = this.shots[this.shot]; this.dir.first = true; this.dir.trackCam = null; }
