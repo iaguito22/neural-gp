@@ -9,13 +9,14 @@ const G = 9.81, MU = 1.53, AERO = 0.0038, MASS = 798, CD = 0.96, ROLL = 160, POW
 const BRK = 0.67;           // fracción del agarre usable frenando
 // aceleración en 5ª, 6ª y 7ª (≈200-305 km/h): un 8 % menos de empuje (transiciones suaves)
 const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-export const gearPower = (v) => 1 - 0.08 * sstep(52, 57, v) * (1 - sstep(82, 87, v));
+// (desde 3.ª, a partir de ~130 km/h, un 7 % menos: empujaba demasiado en las marchas largas)
+export const gearPower = (v) => (1 - 0.08 * sstep(52, 57, v) * (1 - sstep(82, 87, v))) * (1 - 0.07 * sstep(34, 38, v));
 const TRAC = 0.58;          // fracción del agarre usable acelerando
 const LIMN = HALF_W - CAR_HALF - 0.25; // límite lateral de los nodos de trazada
 const CP_STEP = 50;         // checkpoints de cronometraje
 const LEN = 5.6;            // largo del coche
 const SEP = 2.15;           // separación lateral mínima entre ejes de coches
-const EXEC_SD = 0.022;      // variación de una entrada a otra (se multiplica por 1,3 − consistencia)
+const EXEC_SD = 0.026;      // variación de una entrada a otra (se multiplica por 1,3 − consistencia)
 export let DT = 1 / 60;
 // paso de simulación: 1/60 s viendo la sesión; al saltarla se puede usar uno más largo
 export function setDT(dt) { DT = dt; }
@@ -137,7 +138,9 @@ export class Sim {
     const W = this.wx; if (!W || (W.rain < 0.02 && W.wet < 0.02)) return 1;
     if (COMPOUNDS[car.tyre.c].wet) return 1;
     const unc = Math.max(Math.min(1, W.rain * 2.5) * (1 - Math.min(1, (car.wetEst || 0) * 2.5)), Math.min(1, (W.wet - W.line) * 2.5) * 0.6);
-    return 1 - 0.0105 * unc * (1.2 - 0.6 * car.drv.agg);
+    // con lisos y la pista ya mojada sabe que hay charcos: deja margen (hasta un ~8 %)
+    const pud = Math.min(1, Math.max(0, (car.wetEst || 0) - 0.08) * 3.5);
+    return (1 - 0.017 * unc * (1.2 - 0.6 * car.drv.agg)) * (1 - 0.08 * pud * (1.15 - 0.4 * car.drv.agg));
   }
   evoFactor() { return 0.986 + 0.014 * (1 - Math.exp(-this.evo / 350)); }
 
@@ -369,7 +372,8 @@ export class Sim {
     if (car.inPit) return;                                      // en el pit lane no se ve cómo está la pista
     // lo que hay en la trazada (fuera de ella lo ve: ver offWet)
     const real = this.wx.line;
-    const lag = 4 + 14 * (1 - car.drv.cons);
+    // (con lisos sobre agua lo nota enseguida: la goma no agarra)
+    const lag = (4 + 14 * (1 - car.drv.cons)) * (!COMPOUNDS[car.tyre.c].wet && real > 0.2 ? 0.5 : 1);
     car.wetEst += (real * (1 - 0.16 * (car.drv.agg - 0.6)) - car.wetEst) * 0.1 / lag;
     if (this.pickKB(car)) return;
     if ((this.wx.wet > 0.005 || car.wetEst > 0.005) && Math.abs(this.plannedMu(car) - car.muPlan) > car.muPlan * 0.012) this.rebuildProfile(car);
@@ -919,7 +923,14 @@ export class Sim {
       const launch = race && car.lap < 0 && this.t - this.raceStart < 4 ? car.launch : 1;
       // al acelerar siente la tracción de verdad (con un pequeño margen)
       axT = Math.min(launch * TRAC * Math.min(capP, capT * 0.985) * ellipse(rl), pw, (target - v) / DT + res);
-      car.throttle = Math.min(1, 0.3 + (target - v) * 0.5); car.brake = 0;
+      // el pedal no es un interruptor: se pisa en rampa (más despacio saliendo de curva y en mojado; los finos, más
+      // suave) y marca lo que de verdad se usa de la potencia: a la salida, limitado por la tracción, va a medio gas
+      const want = Math.min(1, Math.max(0.08, axT / pw));
+      const rate = (1.8 + 2.4 * (1 - rl)) * (1 - 0.4 * Math.min(1, this.wx.wet * 3)) * (0.85 + 0.3 * car.drv.cons);
+      const thr = Math.min(want, (car.throttle || 0) + rate * DT);
+      if (thr < want) axT = Math.min(axT, thr * pw);
+      if (car.kick && rl > 0.3 && thr > 0.35 && v < 65 && !car.inPit) { car.beta += (Math.sign(ayCmd) || 1) * car.kick; car.kick = 0; }
+      car.throttle = thr; car.brake = 0;
     } else {
       const want = (v - target) / DT - res;
       axT = -Math.max(0, Math.min(BRK * capP * ellipse(rl), want));
@@ -947,6 +958,8 @@ export class Sim {
     const rec = (3.2 + 3.5 * car.drv.cons) * (0.75 + 0.25 * Math.min(1, v / 45)) * (0.94 + 0.12 * feel);
     const bdot = (Math.sign(ayCmd) || 1) * 30 * overs * E * (0.3 + 0.7 * rl) - rec * car.beta + 16 * car.beta * Math.abs(car.beta);
     car.beta += bdot * DT;
+    // en el pit lane no hay trompo que lo corte: se endereza (si entraba cruzado, el término cuadrático se disparaba)
+    if (car.inPit) car.beta = Math.max(-0.3, Math.min(0.3, car.beta * (1 - Math.min(1, DT * 8))));
     if (Math.abs(car.beta) < 1e-4) car.beta = 0;
     if (car.zoneIn >= 0) car.zoneSlide = (car.zoneSlide || 0) + (E + Math.abs(car.beta)) * DT;
     // cada derrape cazado enseña tacto: sobre todo para estas condiciones, algo para las otras
@@ -1333,6 +1346,10 @@ export class Sim {
         next = car.strategy.stints[car.stint]; car.wxC = null;
       }
       let c = next.c;
+      // parada por otra cosa (daños, desgaste) con la pista mojada: gomas de agua, no el compuesto seco del plan
+      // (salían con duros a pista empapada y trompeaban vuelta tras vuelta)
+      const wc = idealTyre(Math.max(car.wetEst || 0, this.wx.line));
+      if (wc && !COMPOUNDS[c].wet) { c = wc; car.strategy.stints = car.strategy.stints.slice(0, car.stint).concat([{ c, from: car.lap, to: this.raceLaps }]); }
       const M = car.mgr;
       if (M) {
         if (M.tyre) { c = M.tyre; car.strategy.stints = car.strategy.stints.slice(0, car.stint).concat([{ c, from: car.lap, to: this.raceLaps }]); }
@@ -1821,9 +1838,12 @@ export class Sim {
     const ss = this.session, press = ss.id === 'RACE' ? (car.mode === 'attack' || car.mode === 'defend' ? 0.006 : 0) : car.lapKind === 'push' && ss.id !== 'FP' ? 0.003 : 0;
     // en libres busca el límite (más variación), en una vuelta de clasificación arriesga, y con agua le cuesta más medir
     const explore = ss.id === 'FP' ? 1.7 : car.lapKind === 'push' ? 1.45 : 1;
-    const wetSd = 1 + 0.5 * Math.min(1, this.wetAt(car) * 2);
-    car.exec = 1 + gauss(this.rng) * EXEC_SD * (1.3 - car.drv.cons) * Math.min(1.7, explore * wetSd) + press * (1.2 - car.drv.cons);
+    const wetSd = 1 + (COMPOUNDS[car.tyre.c].wet ? 0.9 : 0.4) * Math.min(1, this.wetAt(car) * 2);
+    car.exec = 1 + gauss(this.rng) * EXEC_SD * (1.3 - car.drv.cons) * Math.min(2.1, explore * wetSd) + press * (1.2 - car.drv.cons);
     car.zoneV0 = car.v;
+    // a veces, al abrir gas a la salida, se le va la trasera (y la caza): más los agresivos y con agua
+    const wet = COMPOUNDS[car.tyre.c].wet ? Math.min(1, this.wetAt(car) * 3) : 0;   // (con lisos en mojado ya tiene bastante)
+    car.kick = !car.inPit && this.rng() < 0.016 * (0.6 + car.drv.agg) * (1 + 1.5 * wet) * (ss.id === 'RACE' ? 1 : 1.3) ? 0.08 + this.rng() * (0.17 + 0.15 * wet) : 0;
     const c = car.candNext;
     if (c && c.z === z) {
       car.candNext = null;

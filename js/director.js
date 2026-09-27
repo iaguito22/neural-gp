@@ -61,9 +61,34 @@ export class Director {
     add(-70, 1, 12, 4, 'meta'); add(30, 1, 10, 4, 'meta');
     // pit lane
     for (const b of [T.pit.boxes[2], T.pit.boxes[7]]) { T.pos(b.s + 40, T.pit.wallD - 2, P); cams.push({ s: T.wrap(b.s + 40), pos: new THREE.Vector3(P[0], P[1] + 4, P[2]), side: -1, tag: 'boxes' }); }
-    cams.sort((a, b) => a.s - b.s);
-    this.trackCams = cams;
+    // cobertura: tramos de BIN m en los que cada cámara ve el coche (a menos de 210 m, sin nada en medio) y, como
+    // mucho, dos cámaras por tramo: si una tercera ve lo mismo, sobra (antes en una recta cambiaba 3 veces).
+    // Se quedan primero las de meta y curva; se descartan las que apenas ven un trozo.
+    const BIN = this.BIN = 10, NB = this.NB = Math.ceil(T.L / BIN), tgt = new THREE.Vector3();
+    for (const c of cams) {
+      if (c.tag === 'boxes') continue;
+      let run = [], best = [];
+      for (let a = 250; a >= -50; a -= BIN) {           // a: cuánto le falta al coche para llegar a la cámara
+        const sc = T.wrap(c.s - a); T.pos(sc, 0, P); tgt.set(P[0], P[1] + 0.8, P[2]);
+        const ok = c.pos.distanceTo(tgt) < 210 && !this.world.losBlocked(c.pos, tgt);
+        if (ok) run.push(Math.floor(sc / BIN) % NB); else run = [];
+        if (run.length > best.length) best = run.slice();
+      }
+      c.cov = best;
+    }
+    const PRI = { meta: 0, curva: 1, frenada: 2, recta: 3 }, count = new Uint8Array(NB), kept = [];
+    for (const c of cams.filter((c) => c.tag !== 'boxes').sort((a, b) => PRI[a.tag] - PRI[b.tag] || b.cov.length - a.cov.length)) {
+      if (c.cov.length < 7) continue;
+      if (c.cov.some((b) => count[b] >= 2)) continue;
+      for (const b of c.cov) count[b]++;
+      c.covSet = new Set(c.cov); kept.push(c);
+    }
+    this.trackCams = kept.concat(cams.filter((c) => c.tag === 'boxes')).sort((a, b) => a.s - b.s);
   }
+  // ¿ve esta cámara el tramo en el que está (o estará) el coche?
+  covers(c, s) { return c.tag === 'boxes' || c.covSet.has(Math.floor(this.T.wrap(s) / this.BIN) % this.NB); }
+  // metros que le quedan al coche dentro de lo que ve la cámara
+  covLeft(c, s) { let m = 0; while (m < 320 && this.covers(c, s + m)) m += this.BIN; return m; }
 
   setType(t, manual = true) {
     if (manual) { this.auto = false; this.lockFocus = false; }
@@ -247,6 +272,25 @@ export class Director {
     // de Q1 dejaba el director clavado en un coche todo Q2 y Q3)
     if (this.storySess !== ss) {
       this.storySess = ss; this.qHold = 0; this.storyT = null; this.lastFill = undefined; this.seen = []; this.story = null; this.qLap = null; this.lineShot = -1;
+      this.openCar = null; this.openDone = false;
+    }
+    // arranque: la realización se queda con el primero que sale de boxes durante toda su vuelta de salida, en vez de
+    // ir saltando de un coche a otro según van saliendo
+    if (!this.openDone) {
+      if (!this.openCar) {
+        const c = sim.cars.find((c) => c.state === 'track' && !c.out && !c.retired);
+        if (c) { this.openCar = c; this.openLap = null; }
+      }
+      const c = this.openCar;
+      if (c && this.openLap == null && !c.inPit) this.openLap = c.lap;     // la vuelta cuenta desde que pisa la pista
+      if (c && ((this.openLap != null && c.lap !== this.openLap) || c.out || c.retired || c.state !== 'track' || sim.t > 240)) this.openDone = true;
+      else if (c) {
+        if (this.focus !== c) {
+          this.focus = c; this.story = { kind: 'pitexit', car: c, t0: sim.t }; this.storyT = sim.t; this.qLap = c.lap; this.shotN = 0;
+          this.seen[c.i] = sim.t; this.reason = 'pit'; this.cutTo(this.sessionShot({ kind: 'pitexit' }));
+        } else this.shotCycleS({ kind: 'filler', toLine: 1e9 });
+        return true;
+      }
     }
     const cls = sim.classification(), best = sim.fastest?.t;
     const cut = SESSIONS_CUT[ss.id] || 0, left = ss.dur - sim.t;
@@ -627,7 +671,9 @@ export class Director {
           this.losBad = bad ? 2 : 0;
         }
         if (!tc && this.auto && this.noCamUntil > performance.now()) { this.type = Math.random() < 0.5 ? 'chase' : 'heli'; this.first = true; break; }
-        if (!tc || ahead(tc) < -45 || ahead(tc) > 330 || this.losBad >= 2 || (this.focus.inPit !== (tc.tag === 'boxes') && this.focus.pitPhase === 'stop')) {
+        // se sigue con la misma cámara mientras el coche esté en su tramo: nada de saltar a otra a mitad de recta
+        const pitOK = tc && (tc.tag === 'boxes' ? this.focus.inPit : !(this.focus.inPit && this.focus.pitPhase === 'stop'));
+        if (!tc || !pitOK || (tc.tag === 'boxes' ? ahead(tc) < -45 || ahead(tc) > 330 : !this.covers(tc, s)) || this.losBad >= 2) {
           const P = [0, 0, 0];
           const futs = [0.5, 1.5, 3, 4.5].map((tt) => { T.pos(s + Math.max(8, this.focus.v) * tt, this.focus.d, P); return new THREE.Vector3(P[0], P[1] + 0.8, P[2]); });
           const clear = (c, n) => !this.world.losBlocked(c.pos, tgtNow) && futs.slice(0, n).every((f) => !this.world.losBlocked(c.pos, f));
@@ -636,11 +682,12 @@ export class Director {
             if (c.tag === 'boxes' && !(this.focus.inPit)) continue;
             if (c === tc && this.losBad >= 2) continue;
             const a = ahead(c);
-            if (a < -10 || a > 300) continue;
+            if (c.tag === 'boxes' ? a < -10 || a > 300 : !this.covers(c, s)) continue;
             const toLine = T.ahead(s, 0);
             // llegada a meta: la cámara de meta que le toca (la de antes de la línea y, pasada, la de después)
             if (this.wantLine && (toLine < 400 || toLine > T.L - 60)) cands.push({ c, score: Math.abs(a - (toLine > T.L - 60 ? 0 : toLine)) + (c.tag === 'meta' ? -60 : 0) });
-            else cands.push({ c, score: Math.abs(a - 90) + (c.tag === 'curva' ? -30 : 0) });
+            // la que más tramo le queda por ver (menos cambios); algo de preferencia por las de curva
+            else cands.push({ c, score: -(c.tag === 'boxes' ? 150 : this.covLeft(c, s)) + (c.tag === 'curva' ? -30 : 0) });
           }
           cands.sort((x, y) => x.score - y.score);
           let pick = null;
@@ -658,9 +705,10 @@ export class Director {
         const target = v2.copy(carPos).add(v3.set(0, 0.6, 0));
         // si hay pelea, encuadrar a los dos
         const ah = this.sim.carAheadOnTrack(this.focus);
-        let span = 7;
+        // zoom con mesura: de lejos el coche se ve algo más pequeño en vez de llenar el plano
+        let span = 7 + Math.max(0, cam.position.distanceTo(target) - 60) * 0.045;
         if (ah && !ah.inPit && T.rel(this.focus.s, ah.s) < 40) {
-          const AV = this.vis[ah.i]; target.lerp(AV.root.position, 0.4); span = 7 + T.rel(this.focus.s, ah.s) * 0.55;
+          const AV = this.vis[ah.i]; target.lerp(AV.root.position, 0.4); span += T.rel(this.focus.s, ah.s) * 0.55;
         }
         this.smoothLook.copy(target);
         cam.lookAt(this.smoothLook);

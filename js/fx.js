@@ -608,6 +608,42 @@ export function buildFx(scene, T, sim, visuals, world) {
   // =========================================================================
   // 6. EVENTOS DE LA SIMULACIÓN (sim.on)
   // =========================================================================
+  function clearSmoke() {
+    for (let i = 0; i < smkLive; i++) {
+      smkAlpha[i] = 0;
+      smkSize[i] = 0;
+    }
+    smkLive = 0;
+    smkGeo.setDrawRange(0, 0);
+    smkGeo.attributes.position.needsUpdate = true;
+    smkGeo.attributes.aSize.needsUpdate = true;
+    smkGeo.attributes.aAlpha.needsUpdate = true;
+    smkGeo.attributes.aShade.needsUpdate = true;
+  }
+
+  function clearSparks() {
+    for (let i = 0; i < spkLive; i++) {
+      spkAlpha[i] = 0;
+      spkSize[i] = 0;
+    }
+    spkLive = 0;
+    spkGeo.setDrawRange(0, 0);
+    spkGeo.attributes.position.needsUpdate = true;
+    spkGeo.attributes.aColor.needsUpdate = true;
+    spkGeo.attributes.aSize.needsUpdate = true;
+    spkGeo.attributes.aAlpha.needsUpdate = true;
+  }
+
+  function resetCarSparks() {
+    for (let i = 0; i < carSpk.length; i++) {
+      carSpk[i].burstTimer = 0;
+      carSpk[i].cooldown = 0;
+      carSpk[i].burstDuration = 0;
+      carSpk[i].intensity = 0;
+      carSpk[i].cycle = 0;
+    }
+  }
+
   function resetSessionFx() {
     for (let i = 0; i < MAX_DEBRIS; i++) {
       debrisPieces[i].active = false;
@@ -622,18 +658,13 @@ export function buildFx(scene, T, sim, visuals, world) {
     tecInstancedMesh.instanceMatrix.needsUpdate = true;
     tecHitIdx = 0;
 
-    smkLive = 0;
-    spkLive = 0;
-    smkGeo.setDrawRange(0, 0);
-    spkGeo.setDrawRange(0, 0);
+    clearSmoke();
+    clearSparks();
     grvGeo.setDrawRange(0, 0);
+    grvGeo.attributes.position.needsUpdate = true;
+    grvGeo.attributes.aAlpha.needsUpdate = true;
 
-    for (let i = 0; i < carSpk.length; i++) {
-      carSpk[i].burstTimer = 0;
-      carSpk[i].cooldown = 0;
-      carSpk[i].burstDuration = 0;
-      carSpk[i].intensity = 0;
-    }
+    resetCarSparks();
 
     for (const car of sim.cars) {
       const V = visuals[car.i];
@@ -654,16 +685,22 @@ export function buildFx(scene, T, sim, visuals, world) {
 
   sim.on((e) => {
     if (!e) return;
-    if (e.type === 'session') {
+    if (e.type === 'session' || e.type === 'sessionEnd') {
       resetSessionFx();
     } else if (e.type === 'debris') {
-      spawnDebrisExplosion(e.car, e.part, e.sev, e.broken, e.s, e.d);
+      if (sim.session && !sim.session.done && !window.__app?.skipping) {
+        spawnDebrisExplosion(e.car, e.part, e.sev, e.broken, e.s, e.d);
+      }
     } else if (e.type === 'barrier') {
-      handleBarrierHit(e.s, e.d, e.side, e.sev, e.car);
+      if (sim.session && !sim.session.done && !window.__app?.skipping) {
+        handleBarrierHit(e.s, e.d, e.side, e.sev, e.car);
+      }
     } else if (e.type === 'contact' && e.wall && (e.sev || 0) > 6) {
-      const V = visuals[e.car?.i];
-      if (V && V.root) {
-        emitSparks(V.root.position.x, V.root.position.y + 0.4, V.root.position.z, 0, 4, 0, 30, 16);
+      if (sim.session && !sim.session.done && !window.__app?.skipping) {
+        const V = visuals[e.car?.i];
+        if (V && V.root) {
+          emitSparks(V.root.position.x, V.root.position.y + 0.4, V.root.position.z, 0, 4, 0, 30, 16);
+        }
       }
     }
   });
@@ -678,8 +715,33 @@ export function buildFx(scene, T, sim, visuals, world) {
     new THREE.Vector3(-0.78, 0.04, -1.8),// RR
   ];
 
+  let lastReplayActive = false;
+
   function update(dt) {
     if (dt <= 0) return;
+
+    const isReplay = !!window.__app?.replay?.active;
+    if (isReplay !== lastReplayActive) {
+      lastReplayActive = isReplay;
+      clearSmoke();
+      clearSparks();
+      resetCarSparks();
+    }
+
+    const isSkipping = !!window.__app?.skipping;
+    if (isSkipping) {
+      if (smkLive > 0) clearSmoke();
+      if (spkLive > 0) clearSparks();
+      return;
+    }
+
+    let speedMult = 1;
+    if (isReplay) {
+      speedMult = window.__app?.replay?.rate || 1;
+    } else if (sim.session && !sim.session.done) {
+      speedMult = window.__app?.speed ?? 1;
+    }
+    const simDt = dt * speedMult;
 
     const vH = window.innerHeight || 800;
     const uScaleVal = vH * 0.866;
@@ -696,11 +758,7 @@ export function buildFx(scene, T, sim, visuals, world) {
     for (let ci = 0; ci < sim.cars.length; ci++) {
       const car = sim.cars[ci];
       const V = visuals[car.i];
-      if (!V || car.out || car.state === 'garage') continue;
-
-      const root = V.root;
-      const rootPos = root.position;
-      const rootQuat = root.quaternion;
+      if (!V) continue;
 
       // 1. Daños en el modelo 3D (alerones y suspensión)
       const parts = car.parts || { fw: 0, rw: 0, susp: 0 };
@@ -744,11 +802,27 @@ export function buildFx(scene, T, sim, visuals, world) {
         }
       }
 
+      const st = carSpk[ci] || (carSpk[ci] = { burstTimer: 0, cooldown: 0, burstDuration: 0, intensity: 0, cycle: ci * 0.37 });
+      if (st.cooldown > 0) st.cooldown -= simDt;
+      if (st.burstTimer > 0) st.burstTimer -= simDt;
+
+      const canEmit = !car.out && !car.retired && !car.parked && !car.finished && !car.inPit &&
+                      car.state === 'track' && (!sim.session || !sim.session.done) && simDt > 0;
+
+      if (!canEmit) {
+        st.burstTimer = 0;
+        continue;
+      }
+
+      const root = V.root;
+      const rootPos = root.position;
+      const rootQuat = root.quaternion;
+
       // 2. Humo de bloqueo de ruedas delanteras (car.lock)
       const lock = car.lock || 0;
       if (lock > 0.03 && car.v > 2) {
-        const rate = lock * Math.min(2.0, car.v / 15) * 26 * dt;
-        let count = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);
+        const rate = lock * Math.min(2.0, car.v / 15) * 26 * simDt;
+        let count = Math.min(20, Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0));
 
         tmpV.set(0, 0, 1).applyQuaternion(rootQuat);
         const fwdX = tmpV.x, fwdZ = tmpV.z;
@@ -765,7 +839,7 @@ export function buildFx(scene, T, sim, visuals, world) {
             const life = 0.85 + Math.random() * 0.45;
             const s0 = 0.35 + lock * 0.25;
             const sMax = 0.9 + lock * 0.6;
-            const a0 = 0.16 + lock * 0.22;   // (humo fino: más espeso tapaba medio plano)
+            const a0 = 0.16 + lock * 0.22;
             const shade = 0.88 + Math.random() * 0.1;
 
             emitSmoke(tmpW.x, tmpW.y, tmpW.z, vx, vy, vz, life, s0, sMax, a0, shade);
@@ -778,8 +852,8 @@ export function buildFx(scene, T, sim, visuals, world) {
       const isSpin = car.mistake && car.mistake.type === 'spin';
       if ((absBeta > 0.12 || isSpin) && car.v > 2) {
         const intensity = isSpin ? 1.0 : Math.min(1.0, (absBeta - 0.12) / 0.22);
-        const rate = intensity * Math.min(2.0, car.v / 14) * 60 * dt;
-        let count = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);
+        const rate = intensity * Math.min(2.0, car.v / 14) * 60 * simDt;
+        let count = Math.min(30, Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0));
 
         tmpV.set(0, 0, 1).applyQuaternion(rootQuat);
         const fwdX = tmpV.x, fwdZ = tmpV.z;
@@ -805,31 +879,22 @@ export function buildFx(scene, T, sim, visuals, world) {
       }
 
       // 4. Chispas de los patines (skid blocks de titanio)
-      if (car.state !== 'grid' && !car.inPit && car.v > 60) {
-        const st = carSpk[ci] || (carSpk[ci] = { burstTimer: 0, cooldown: 0, burstDuration: 0, intensity: 0 });
-
-        if (st.cooldown > 0) st.cooldown -= dt;
-        if (st.burstTimer > 0) st.burstTimer -= dt;
-
+      if (car.v > 60) {
         // Factores de roce de patines:
-        // Velocidad: por encima de ~250 km/h (~69.4 m/s)
         const v = car.v;
         const vExcess = Math.max(0, v - 68.0);
         const aeroDownforce = (v / 75.0) ** 2 * (vExcess / 11.5);
 
-        // Compresiones (cambio de pendiente hacia arriba / valle) y cambios de rasante
         const sIdx = T.idx ? T.idx(car.s) : Math.floor(((car.s % T.L + T.L) % T.L) / trackDs);
         const d2yVal = trackD2y[sIdx] || 0;
         const vertAcc = v * v * d2yVal;
         let compFactor = 0;
         if (vertAcc > 0.55) {
-          compFactor = Math.min(3.8, vertAcc * 0.70); // valle / compresión fuerte
+          compFactor = Math.min(3.8, vertAcc * 0.70);
         } else if (d2yVal < -0.0008) {
-          // Cambio de rasante / cresta
           compFactor = Math.min(2.2, Math.abs(d2yVal) * v * 16.0);
         }
 
-        // Pisar pianos a alta velocidad (|d| cerca de HALF_W en curvas)
         const absD = Math.abs(car.d || 0);
         let kerbFactor = 0;
         const isCorner = Math.abs(T.k ? T.k[sIdx] : 0) > 0.0025 || (T.zoneOf && T.zoneOf[sIdx] >= 0);
@@ -837,32 +902,26 @@ export function buildFx(scene, T, sim, visuals, world) {
           kerbFactor = Math.min(3.6, (absD - 7.4) * 1.75 * (v / 65.0));
         }
 
-        // Baches / micro-ondulaciones del asfalto
         const sVal = car.s || 0;
         const bumpWave = Math.sin(sVal * 0.33 + 1.4) * Math.cos(sVal * 0.77 + 0.8) + 0.45 * Math.sin(sVal * 1.63);
         const bumpFactor = (bumpWave > 0.40 && v > 70) ? (bumpWave - 0.40) * 2.5 : 0;
 
-        // Dinámica de cabeceo (pitch)
         const pitchFactor = car.pitch < -0.006 ? Math.min(1.8, Math.abs(car.pitch) * 75.0) : 0;
 
-        // Menos combustible = coche más bajo
         const fuel = car.fuel ?? 50;
         const fuelFactor = 1.0 + Math.max(0, (100 - fuel) / 100) * 0.55;
 
-        // Puntuación total de contacto
         const scrapeScore = (aeroDownforce * (0.34 + compFactor + bumpFactor + pitchFactor) + kerbFactor * (v / 56.0)) * fuelFactor * wetFactor;
 
-        // Ráfagas a ritmo fijo: por encima de ~270 km/h, medio segundo de chispas cada 2 s (con un desfase por coche
-        // para que no salgan todos a la vez); además, una ráfaga extra en una compresión fuerte
-        st.cycle = (st.cycle ?? ci * 0.37) + dt;
+        st.cycle = (st.cycle ?? ci * 0.37) + simDt;
         const fast = v > 75 && wetFactor > 0.3;
-        if (!fast) st.cycle = Math.min(st.cycle, 1.5);        // al volver a ir rápido, sale enseguida
+        if (!fast) st.cycle = Math.min(st.cycle, 1.5);
         if (fast && st.cycle >= 2.0) { st.cycle = 0; st.burstTimer = 0.5; st.intensity = Math.min(3.5, Math.max(1, scrapeScore)); }
         else if (compFactor > 1.5 && st.burstTimer <= 0 && st.cooldown <= 0 && v > 62) { st.burstTimer = 0.3; st.cooldown = 1.5; st.intensity = Math.min(3.5, Math.max(1, scrapeScore)); }
 
         if (st.burstTimer > 0) {
-          const rate = (170 + st.intensity * 200) * dt;   // (más y más finas)
-          let count = Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0);
+          const rate = (170 + st.intensity * 200) * simDt;
+          let count = Math.min(40, Math.floor(rate) + (Math.random() < rate % 1 ? 1 : 0));
           if (count > 0) {
             emitSkidSparks(car, rootPos, rootQuat, count, st.intensity, isNight);
           }
@@ -874,7 +933,7 @@ export function buildFx(scene, T, sim, visuals, world) {
     // B. Actualización de partículas de humo
     // -----------------------------------------------------------------------
     for (let i = 0; i < smkLive; i++) {
-      smkLife[i] += dt;
+      smkLife[i] += simDt;
       if (smkLife[i] >= smkMaxLife[i]) {
         const last = --smkLive;
         if (i < last) {
@@ -893,37 +952,38 @@ export function buildFx(scene, T, sim, visuals, world) {
           smkSize[i] = smkSize[last];
           smkAlpha[i] = smkAlpha[last];
         }
+        smkAlpha[last] = 0;
+        smkSize[last] = 0;
         i--;
         continue;
       }
 
-      const t = smkLife[i] / smkMaxLife[i];
-      smkPos[i * 3] += smkVel[i * 3] * dt;
-      smkPos[i * 3 + 1] += smkVel[i * 3 + 1] * dt;
-      smkPos[i * 3 + 2] += smkVel[i * 3 + 2] * dt;
+      const t = Math.min(1.0, Math.max(0.0, smkLife[i] / smkMaxLife[i]));
+      smkPos[i * 3] += smkVel[i * 3] * simDt;
+      smkPos[i * 3 + 1] += smkVel[i * 3 + 1] * simDt;
+      smkPos[i * 3 + 2] += smkVel[i * 3 + 2] * simDt;
 
-      smkVel[i * 3] *= 0.96;
-      smkVel[i * 3 + 1] += 0.25 * dt;
-      smkVel[i * 3 + 2] *= 0.96;
+      const drag = Math.pow(0.96, simDt * 60);
+      smkVel[i * 3] *= drag;
+      smkVel[i * 3 + 1] += 0.25 * simDt;
+      smkVel[i * 3 + 2] *= drag;
 
       const expand = t * (2.0 - t);
       smkSize[i] = smkS0[i] + (smkSMax[i] - smkS0[i]) * expand;
-      smkAlpha[i] = smkA0[i] * (1.0 - t * t);
+      smkAlpha[i] = Math.max(0, smkA0[i] * (1.0 - t * t));
     }
 
     smkGeo.setDrawRange(0, smkLive);
-    if (smkLive > 0) {
-      smkGeo.attributes.position.needsUpdate = true;
-      smkGeo.attributes.aSize.needsUpdate = true;
-      smkGeo.attributes.aAlpha.needsUpdate = true;
-      smkGeo.attributes.aShade.needsUpdate = true;
-    }
+    smkGeo.attributes.position.needsUpdate = true;
+    smkGeo.attributes.aSize.needsUpdate = true;
+    smkGeo.attributes.aAlpha.needsUpdate = true;
+    smkGeo.attributes.aShade.needsUpdate = true;
 
     // -----------------------------------------------------------------------
     // C. Actualización de chispas
     // -----------------------------------------------------------------------
     for (let i = 0; i < spkLive; i++) {
-      spkLife[i] += dt;
+      spkLife[i] += simDt;
       if (spkLife[i] >= spkMaxLife[i]) {
         const last = --spkLive;
         if (i < last) {
@@ -942,20 +1002,22 @@ export function buildFx(scene, T, sim, visuals, world) {
           spkSize[i] = spkSize[last];
           spkAlpha[i] = spkAlpha[last];
         }
+        spkAlpha[last] = 0;
+        spkSize[last] = 0;
         i--;
         continue;
       }
 
-      const t = spkLife[i] / spkMaxLife[i];
-      spkVel[i * 3 + 1] -= 22.0 * dt;
+      const t = Math.min(1.0, Math.max(0.0, spkLife[i] / spkMaxLife[i]));
+      spkVel[i * 3 + 1] -= 22.0 * simDt;
 
-      const drag = Math.pow(0.95, dt * 60);
+      const drag = Math.pow(0.95, simDt * 60);
       spkVel[i * 3] *= drag;
       spkVel[i * 3 + 2] *= drag;
 
-      spkPos[i * 3] += spkVel[i * 3] * dt;
-      spkPos[i * 3 + 1] += spkVel[i * 3 + 1] * dt;
-      spkPos[i * 3 + 2] += spkVel[i * 3 + 2] * dt;
+      spkPos[i * 3] += spkVel[i * 3] * simDt;
+      spkPos[i * 3 + 1] += spkVel[i * 3 + 1] * simDt;
+      spkPos[i * 3 + 2] += spkVel[i * 3 + 2] * simDt;
 
       if (spkPos[i * 3 + 1] <= spkGroundY[i] + 0.02) {
         spkPos[i * 3 + 1] = spkGroundY[i] + 0.02;
@@ -964,16 +1026,14 @@ export function buildFx(scene, T, sim, visuals, world) {
         spkVel[i * 3 + 2] *= 0.74;
       }
 
-      spkAlpha[i] = 1.0 - t * t;
+      spkAlpha[i] = Math.max(0, 1.0 - t * t);
     }
 
     spkGeo.setDrawRange(0, spkLive);
-    if (spkLive > 0) {
-      spkGeo.attributes.position.needsUpdate = true;
-      spkGeo.attributes.aAlpha.needsUpdate = true;
-      spkGeo.attributes.aColor.needsUpdate = true;
-      spkGeo.attributes.aSize.needsUpdate = true;
-    }
+    spkGeo.attributes.position.needsUpdate = true;
+    spkGeo.attributes.aAlpha.needsUpdate = true;
+    spkGeo.attributes.aColor.needsUpdate = true;
+    spkGeo.attributes.aSize.needsUpdate = true;
 
     // -----------------------------------------------------------------------
     // D. Física de trozos de fibra de carbono (Debris)
@@ -983,7 +1043,7 @@ export function buildFx(scene, T, sim, visuals, world) {
       const p = debrisPieces[i];
       if (!p.active) continue;
 
-      p.life += dt;
+      p.life += simDt;
       if (p.life >= 60.0) {
         p.active = false;
         debrisMesh.setMatrixAt(i, zeroMatrix);
@@ -992,17 +1052,17 @@ export function buildFx(scene, T, sim, visuals, world) {
       }
 
       if (!p.onGround) {
-        p.vy -= 14.0 * dt;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.z += p.vz * dt;
+        p.vy -= 14.0 * simDt;
+        p.x += p.vx * simDt;
+        p.y += p.vy * simDt;
+        p.z += p.vz * simDt;
 
-        p.rx += p.vrx * dt;
-        p.ry += p.vry * dt;
-        p.rz += p.vrz * dt;
+        p.rx += p.vrx * simDt;
+        p.ry += p.vry * simDt;
+        p.rz += p.vrz * simDt;
 
-        p.vx *= Math.pow(0.98, dt * 60);
-        p.vz *= Math.pow(0.98, dt * 60);
+        p.vx *= Math.pow(0.98, simDt * 60);
+        p.vz *= Math.pow(0.98, simDt * 60);
 
         if (p.y <= p.groundY + 0.018) {
           p.y = p.groundY + 0.018;
@@ -1045,5 +1105,5 @@ export function buildFx(scene, T, sim, visuals, world) {
     updateGravel();
   }
 
-  return { update };
+  return { update, reset: resetSessionFx };
 }

@@ -434,126 +434,594 @@ export class UI {
     if (this.learnCond == null) this.learnCond = (sim.wx?.line ?? 0) > 0.25 ? 'w' : 'd';
     const cond = this.learnCond, wetC = cond === 'w';
     const kbOf = (c) => (wetC ? c.brain.wet : c.brain);
-    const laps = (c) => c.brain.lapHist.filter((l) => !!l.wet === wetC);
+    const laps = (c) => (c.brain.lapHist ? c.brain.lapHist.filter((l) => !!l.wet === wetC) : []);
     const bestOf = (c) => { const L = laps(c); return L.length ? Math.min(...L.map((l) => l.t)) : 999; };
     const cars = sim.cars.slice().sort((a, b) => bestOf(a) - bestOf(b));
     const prior = { S: 0.22, M: 0.12, H: 0.075 };
     const zero = { exp: 0, acc: 0, mist: 0, locks: 0, catches: 0 };
-    const rows = cars.map((c) => {
+
+    const teamAccent = (tm) => {
+      if (!tm) return '#20E83B';
+      const c = tm.c1;
+      if (c === '#141414' || c === '#111111' || c === '#1C1C1C') return '#20E83B';
+      if (c === '#1B2A6B' || c === '#0B2A5B') return '#4F86F7';
+      if (c === '#0A5C45') return '#00D09C';
+      if (c === '#C9CED3' || c === '#EDEDED' || c === '#F2F2F2') return '#E0E3E8';
+      return c || '#FF8000';
+    };
+
+    let mostImprovedCar = null, maxGain = 0;
+    let totalGain = 0, gainCount = 0;
+    let totalExp = 0, totalAcc = 0;
+    let topAccCar = cars[0], maxAcc = -1;
+
+    for (const c of sim.cars) {
+      const b = c.brain, st = b.cs?.[cond] || zero;
+      totalExp += st.exp || 0;
+      totalAcc += st.acc || 0;
+      if (st.acc > maxAcc) { maxAcc = st.acc; topAccCar = c; }
+      const cLaps = laps(c);
+      if (cLaps.length >= 2) {
+        const firstT = cLaps[0].t;
+        const bestT = Math.min(...cLaps.map((l) => l.t));
+        const g = firstT - bestT;
+        if (g > 0.005) {
+          totalGain += g;
+          gainCount++;
+          if (g > maxGain) { maxGain = g; mostImprovedCar = c; }
+        }
+      }
+    }
+
+    const f = this.dir.focus || sim.cars[0], fn = esc(f.drv.last);
+    const fAccent = teamAccent(f.team);
+    const fLaps = laps(f);
+    const fBest = fLaps.length ? Math.min(...fLaps.map((l) => l.t)) : null;
+    const fGain = fLaps.length >= 2 && fLaps[0].t > fBest ? fLaps[0].t - fBest : 0;
+
+    let mostImpVal = '', mostImpSub = '';
+    if (mostImprovedCar && maxGain > 0.005) {
+      mostImpVal = `<span class="bar" style="background:${teamAccent(mostImprovedCar.team)}"></span><b>${mostImprovedCar.code}</b> <em>−${maxGain.toFixed(2)} s</em>`;
+      mostImpSub = `${esc(mostImprovedCar.drv.first)} ${esc(mostImprovedCar.drv.last)} lidera la progresión en ${wetC ? 'mojado' : 'seco'}`;
+    } else if (topAccCar && maxAcc > 0) {
+      mostImpVal = `<span class="bar" style="background:${teamAccent(topAccCar.team)}"></span><b>${topAccCar.code}</b> (${maxAcc} mejoras)`;
+      mostImpSub = `${esc(topAccCar.drv.first)} ${esc(topAccCar.drv.last)} es quien más cambios positivos ha validado`;
+    } else {
+      mostImpVal = `<span class="badge">Iniciando</span>`;
+      mostImpSub = `Explorando los primeros puntos de frenada y trazada`;
+    }
+
+    const avgGainVal = gainCount > 0 ? `<em>−${(totalGain / gainCount).toFixed(2)} s</em>` : `<span class="badge">En progreso</span>`;
+    const avgGainSub = gainCount > 0 ? `Mejora media entre los ${gainCount} pilotos con tandas cronometradas` : `Consolidando primeras referencias de vuelta`;
+
+    const totalTestsVal = totalExp > 0 ? `<b>${Math.round((totalAcc / totalExp) * 100)} %</b>` : `<span class="badge">Sin pruebas aún</span>`;
+    const totalTestsSub = totalExp > 0 ? `${totalAcc} de ${totalExp} cambios probados en curva han ganado tiempo` : `Pruebas de trazada y frenada en cada curva`;
+    // columnas sin datos todavía (degradación sin tandas largas, adelantamientos fuera de carrera): no se enseñan
+    const showDeg = !wetC && cars.some((c) => 'SMH'.split('').some((x) => c.brain.deg[x].n >= 3));
+    const showOt = cars.some((c) => c.brain.ot.some((o) => o.t > 0));
+
+    const focusVal = `<span class="bar" style="background:${fAccent}"></span><b>${f.code}</b> <span style="font-size:13px;font-weight:700;color:#c0c3d0">${esc(f.drv.last)}</span>`;
+    const focusSub = fBest ? `Mejor vuelta: <b>${fmtLap(fBest)}</b> ${fGain > 0.005 ? `<span style="color:var(--green);font-weight:700">(−${fGain.toFixed(2)} s)</span>` : ''}` : `Sin vueltas limpias en ${wetC ? 'mojado' : 'seco'} aún`;
+
+    const rows = cars.map((c, idx) => {
       const b = c.brain, kb = kbOf(c), st = b.cs?.[cond] || zero;
-      const commit = kb ? kb.commit.reduce((a, x) => a + x, 0) / kb.commit.length : NaN;
-      const L = laps(c); const first = L[0]?.t, bestL = L.length ? Math.min(...L.map((l) => l.t)) : NaN;
-      const gain = first && bestL ? first - bestL : 0;
+      const commit = kb && kb.commit ? kb.commit.reduce((a, x) => a + x, 0) / kb.commit.length : NaN;
+      const L = laps(c);
+      const bestL = L.length ? Math.min(...L.map((l) => l.t)) : Infinity;
+      const firstL = L[0]?.t;
+      const gain = firstL && isFinite(bestL) && firstL > bestL ? firstL - bestL : 0;
+      const feel = b.feel ? b.feel[cond] : NaN;
       const ot = b.ot.reduce((a, o) => ({ t: a.t + o.t, w: a.w + o.w }), { t: 0, w: 0 });
       const deg = 'SMH'.split('').map((x) => (b.deg[x].n >= 3 ? degSlope(b, x, prior[x]).toFixed(2) : '·')).join(' / ');
-      const feel = b.feel ? b.feel[cond] : NaN;
-      const pct = (x, lo, span) => Math.max(0, Math.min(100, (x - lo) / span * 100));
-      return `<tr data-i="${c.i}" class="${c === this.dir.focus ? 'hl' : ''}"><td><span class="bar" style="background:${c.team.c1}"></span><span class="code">${c.code}</span></td>
-        <td class="num">${L.length}</td><td class="num">${st.exp}</td><td class="num">${st.acc}</td>
-        <td>${isFinite(commit) ? `<span class="meter"><i style="width:${pct(commit, 0.82, 0.2)}%"></i></span> ${(commit * 100).toFixed(1)}%` : '—'}</td>
-        <td>${isFinite(feel) ? `<span class="meter"><i style="width:${pct(feel, 0, 1)}%;background:#4FC3F7"></i></span>` : '—'}</td>
-        <td class="num">${st.catches}</td><td class="num">${st.locks}</td><td class="num">${st.mist}</td>
-        <td class="num">${gain > 0 ? '−' + gain.toFixed(2) + ' s' : '—'}</td>${wetC ? '' : `<td class="num">${deg}</td>`}<td class="num">${ot.t ? `${ot.w}/${ot.t}` : '—'}</td></tr>`;
+      const cAccent = teamAccent(c.team);
+      const isFocused = c === f;
+      const pct = (x, lo, span) => Math.max(0, Math.min(100, ((x - lo) / span) * 100));
+
+      return `<tr data-i="${c.i}" class="${isFocused ? 'hl' : ''}" title="Haz clic para seleccionar a ${c.code}">
+        <td class="num" style="color:var(--muted);font-weight:700;">${idx + 1}</td>
+        <td><span class="bar" style="background:${cAccent}"></span><span class="code">${c.code}</span> <span style="color:#b3b6c5;font-size:12px;margin-left:3px;">${esc(c.drv.first.charAt(0))}. ${esc(c.drv.last)}</span></td>
+        <td class="num" style="font-weight:700;color:${isFinite(bestL) ? '#fff' : 'var(--muted)'}">${isFinite(bestL) ? fmtLap(bestL) : '—'}</td>
+        <td class="num">${gain > 0.005 ? `<span class="gain-pill">−${gain.toFixed(2)} s</span>` : '<span style="color:var(--muted)">—</span>'}</td>
+        <td class="num">${L.length}</td>
+        <td class="num" title="${st.acc} mejoras aceptadas de ${st.exp} pruebas realizadas">${st.acc} <span style="color:var(--muted);font-size:11px">/ ${st.exp}</span></td>
+        <td><div class="meter-wrap"><span class="meter"><i style="width:${pct(commit, 0.82, 0.20)}%;background:${cAccent}"></i></span><span style="font-size:11px;font-variant-numeric:tabular-nums">${isFinite(commit) ? (commit * 100).toFixed(1) + '%' : '—'}</span></div></td>
+        <td><div class="meter-wrap"><span class="meter"><i style="width:${pct(feel, 0, 1)}%;background:#38BDF8"></i></span><span style="font-size:11px;font-variant-numeric:tabular-nums">${isFinite(feel) ? (feel * 100).toFixed(0) + '%' : '—'}</span></div></td>
+        <td class="num" style="color:#fbbf24">${st.catches || 0}</td>
+        <td class="num" style="color:#f87171">${st.locks || 0}</td>
+        <td class="num" style="color:#fca5a5">${st.mist || 0}</td>
+        ${showDeg ? `<td class="num"><span class="deg-pill">${deg}</span></td>` : ''}
+        ${!showOt ? '' : `<td class="num">${ot.t ? `<span style="font-weight:700;color:${ot.w > 0 ? '#4ade80' : 'var(--muted)'}">${ot.w}</span><span style="color:var(--muted);font-size:11px">/${ot.t}</span>` : '<span style="color:var(--muted)">—</span>'}</td>`}
+      </tr>`;
     }).join('');
-    const f = this.dir.focus, fn = esc(f.drv.last);
-    const KIND = { trazada: 'prueba otra trazada y es más rápido', limite: 'se atreve a apretar más', copia: 'copia la trazada de otro y le sale', prudente: 'comete un error y aprieta menos', caza: 'caza un derrape' };
-    const feed = (sim.learnLog || []).filter((e) => e.wet === wetC).slice(-14).reverse().map((e) => {
+
+    const feedList = (sim.learnLog || []).filter((e) => e.wet === wetC).slice(-20).reverse();
+    const feed = feedList.map((e) => {
       const m = Math.floor(e.t / 60), sec = String(Math.floor(e.t % 60)).padStart(2, '0');
-      return `<li class="${e.car === f ? 'me' : ''} k-${e.kind}"><span class="t">${e.sess || ''} ${m}:${sec}</span><span class="bar" style="background:${e.car.team.c1}"></span><b>${e.car.code}</b> ${KIND[e.kind] || e.kind}${e.corner ? ` en <i>${esc(e.corner)}</i>` : ''}${e.gain > 0.004 ? ` <em>−${e.gain.toFixed(2)} s</em>` : ''}</li>`;
-    }).join('') || `<li class="empty">Aún no ha aprendido nada en ${wetC ? 'mojado' : 'seco'}.</li>`;
-    const noWet = wetC && !sim.cars.some((c) => c.brain.wet);
-    const m = this.modal(`<header><span class="kicker">IA</span><h2>Qué están aprendiendo los pilotos</h2>
-        <div class="seg" id="lCond"><button data-c="d" class="${wetC ? '' : 'on'}">Seco</button><button data-c="w" class="${wetC ? 'on' : ''}">Mojado</button></div>
+      const c = e.car, isMe = c === f, cAcc = teamAccent(c.team);
+      const cornerStr = e.corner ? (e.corner.startsWith('Curva') ? e.corner : `Curva ${e.corner}`) : 'curva';
+      let tagClass = 'tag-trazada', tagText = 'Trazada', desc = '';
+      const gainStr = e.gain > 0.005 ? `−${e.gain.toFixed(2)} s` : '';
+
+      if (e.kind === 'limite') {
+        tagClass = 'tag-limite'; tagText = 'Frenada';
+        desc = e.gain > 0.005 ? `<b>${c.code}</b> retrasa la frenada y entra con más velocidad en <em>${esc(cornerStr)}</em>` : `<b>${c.code}</b> arriesga más agarre en la frenada de <em>${esc(cornerStr)}</em>`;
+      } else if (e.kind === 'trazada') {
+        tagClass = 'tag-trazada'; tagText = 'Trazada';
+        desc = e.gain > 0.005 ? `<b>${c.code}</b> optimiza el vértice y el paso por <em>${esc(cornerStr)}</em>` : `<b>${c.code}</b> ajusta la trayectoria en <em>${esc(cornerStr)}</em>`;
+      } else if (e.kind === 'copia') {
+        tagClass = 'tag-copia'; tagText = 'Referencia';
+        desc = e.gain > 0.005 ? `<b>${c.code}</b> adopta la trazada óptima en <em>${esc(cornerStr)}</em>` : `<b>${c.code}</b> replica la línea ideal en <em>${esc(cornerStr)}</em>`;
+      } else if (e.kind === 'caza') {
+        tagClass = 'tag-caza'; tagText = 'Salvada';
+        desc = `<b>${c.code}</b> salva un sobreviraje con contravolante en <em>${esc(cornerStr)}</em> (gana tacto)`;
+      } else if (e.kind === 'prudente') {
+        tagClass = 'tag-prudente'; tagText = 'Margen';
+        desc = `<b>${c.code}</b> frena con más margen en <em>${esc(cornerStr)}</em> tras un aviso`;
+      } else {
+        desc = `<b>${c.code}</b> prueba una variación en <em>${esc(cornerStr)}</em>`;
+      }
+
+      return `<li class="learn-feed-item ${isMe ? 'me' : ''}">
+        <span class="learn-feed-time">${e.sess || 'FP'} ${m}:${sec}</span>
+        <span class="bar" style="background:${cAcc}"></span>
+        <span class="learn-feed-tag ${tagClass}">${tagText}</span>
+        <span class="learn-feed-desc">${desc}</span>
+        ${gainStr ? `<span class="learn-feed-gain">${gainStr}</span>` : ''}
+      </li>`;
+    }).join('') || `<li class="learn-feed-empty">Aún no hay registros de aprendizaje en ${wetC ? 'mojado' : 'seco'}.</li>`;
+
+    const noWet = wetC && !sim.cars.some((c) => c.brain.wet && c.brain.wet.laps > 0);
+
+    const m = this.modal(`<header><span class="kicker">IA</span><h2>Aprendizaje y evolución en pista</h2>
+        <div class="seg" id="lCond"><button data-c="d" class="${wetC ? '' : 'on'}">☀️ Seco</button><button data-c="w" class="${wetC ? 'on' : ''}">🌧️ Mojado</button></div>
         ${fromResults ? '<button class="btn ghost" id="mBack">Volver</button>' : ''}<button class="btn" id="mClose">Cerrar</button></header>
       <div class="body">
-        <p class="lead">En cada curva, cada piloto prueba pequeñas variaciones de su trazada y de cuánto agarre se atreve a usar, y se queda con lo que le hace más rápido sin errores; si se equivoca, ahí aprieta menos. <b>El seco y el mojado se aprenden por separado</b>: cada mejora pasa solo un poco (~15 %) a la otra memoria, y cazar derrapes en seco le da algo de tacto para cuando llueva. Lo aprendido se borra al empezar otro fin de semana.</p>
-        ${noWet ? '<p class="lead"><b>Este fin de semana aún no ha llovido:</b> la memoria de mojado nacerá de la de seco, más prudente, la primera vez que la pista se moje.</p>' : ''}
-        <div class="grid2">
-          <div class="chartBox"><h3>Mejor vuelta según aprenden · ${wetC ? 'mojado' : 'seco'}</h3><canvas class="chart" id="lchart" width="1000" height="520"></canvas></div>
-          <div class="chartBox"><h3>Trazada de ${fn} en ${wetC ? 'mojado' : 'seco'} frente a la ideal</h3><canvas class="chart" id="lline" width="1000" height="520"></canvas></div>
+        <div class="learn-summary">
+          <div class="learn-card hl">
+            <div class="learn-card-lbl">Piloto más evolucionado</div>
+            <div class="learn-card-val">${mostImpVal}</div>
+            <div class="learn-card-sub">${mostImpSub}</div>
+          </div>
+          <div class="learn-card">
+            <div class="learn-card-lbl">Mejora media del pelotón</div>
+            <div class="learn-card-val">${avgGainVal}</div>
+            <div class="learn-card-sub">${avgGainSub}</div>
+          </div>
+          <div class="learn-card">
+            <div class="learn-card-lbl">Cambios que funcionan</div>
+            <div class="learn-card-val">${totalTestsVal}</div>
+            <div class="learn-card-sub">${totalTestsSub}</div>
+          </div>
+          <div class="learn-card">
+            <div class="learn-card-lbl">Piloto en foco (telemetría)</div>
+            <div class="learn-card-val">${focusVal}</div>
+            <div class="learn-card-sub">${focusSub}</div>
+          </div>
         </div>
-        <div class="grid2" style="margin-top:14px">
-          <div class="chartBox"><h3>Cuánto aprieta ${fn} en cada curva · seco y mojado</h3><canvas class="chart" id="lcommit" width="1000" height="420"></canvas></div>
-          <div class="chartBox"><h3>Últimos aprendizajes · ${wetC ? 'mojado' : 'seco'}</h3><ul class="lfeed">${feed}</ul></div>
+
+        ${noWet ? '<div class="learn-lead wet-info">🌧️ <b>Aún no se ha rodado sobre mojado:</b> la memoria de lluvia partirá de una estimación prudente basada en seco hasta que los pilotos acumulen vueltas con agua en pista.</div>' : '<div class="learn-lead">En cada curva, los pilotos prueban pequeñas variaciones de trazada y frenada. Si mejoran el tiempo sin errores, consolidan el aprendizaje; si sobrepasan el límite, aumentan el margen de seguridad. <b>Seco y mojado se aprenden por separado</b>.</div>'}
+
+        <div class="learn-grid">
+          <div class="learn-box">
+            <div class="learn-box-head"><h3 class="learn-box-title">Evolución de tiempos de vuelta · ${wetC ? 'Mojado' : 'Seco'}</h3><span class="learn-box-sub">⚪ ${f.code} enfocado · — Pelotón</span></div>
+            <canvas class="chart" id="lchart" width="1000" height="420"></canvas>
+          </div>
+          <div class="learn-box">
+            <div class="learn-box-head"><h3 class="learn-box-title">Trazada de ${fn} frente a la ideal</h3><span class="learn-box-sub">Curva con mayor adaptación</span></div>
+            <canvas class="chart" id="lline" width="1000" height="420"></canvas>
+          </div>
         </div>
-        <h3 style="margin-top:16px">Pilotos · ${wetC ? 'mojado' : 'seco'}</h3>
-        <div class="tw"><table class="cls"><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Pruebas</th><th class="num">Mejoras</th><th>Límite usado</th><th title="Tacto con el coche deslizando: sube cazando derrapes">Tacto</th><th class="num">Derrapes cazados</th><th class="num">Bloqueos</th><th class="num">Errores</th><th class="num">Ganado</th>${wetC ? '' : '<th class="num">Degradación S / M / H (s/vta)</th>'}<th class="num">Adelant. éxito/int.</th></tr></thead><tbody>${rows}</tbody></table></div>
+
+        <div class="learn-grid">
+          <div class="learn-box">
+            <div class="learn-box-head"><h3 class="learn-box-title">Nivel de ataque en curva · ${fn}</h3><span class="learn-box-sub">☀️ Seco vs 🌧️ Mojado (% de agarre usado)</span></div>
+            <canvas class="chart" id="lcommit" width="1000" height="420"></canvas>
+          </div>
+          <div class="learn-box">
+            <div class="learn-box-head"><h3 class="learn-box-title">Últimos aprendizajes en pista</h3><span class="learn-box-sub">${wetC ? '🌧️ Mojado' : '☀️ Seco'} (tiempo real)</span></div>
+            <ul class="learn-feed lfeed">${feed}</ul>
+          </div>
+        </div>
+
+        <div class="learn-sec-title"><span>Rendimiento y telemetría de aprendizaje · ${wetC ? 'Mojado' : 'Seco'}</span><span>Haz clic en una fila para enfocar al piloto</span></div>
+        <div class="learn-tw tw"><table class="cls learn-table"><thead><tr>
+          <th class="num" title="Posición según mejor vuelta registrada">#</th>
+          <th title="Piloto y equipo">Piloto</th>
+          <th class="num" title="Mejor tiempo de vuelta limpia conseguido en esta condición">Mejor Vta</th>
+          <th class="num" title="Diferencia de tiempo ganada desde la primera vuelta cronometrada">Mejora</th>
+          <th class="num" title="Número de vueltas limpias completadas">Vueltas</th>
+          <th class="num" title="Mejoras consolidadas / Total de variaciones probadas en curva">Mejoras / Pruebas</th>
+          <th title="Porcentaje medio de agarre al límite arriesgado en curva">Agarre Usado</th>
+          <th title="Tacto y sensibilidad del piloto al límite de adherencia (aumenta salvando derrapes)">Tacto</th>
+          <th class="num" title="Derrapes salvados con contravolante con éxito">Salvadas</th>
+          <th class="num" title="Bloqueos de frenada delanteros">Bloqueos</th>
+          <th class="num" title="Errores o pérdidas de control">Errores</th>
+          ${!showDeg ? '' : '<th class="num" title="Degradación de neumático estimada en s/vuelta para Blando (S) / Medio (M) / Duro (H)">Degradación S/M/H</th>'}
+          ${!showOt ? '' : '<th class="num" title="Adelantamientos aprendidos con éxito frente a intentos ensayados">Adelantamientos</th>'}
+        </tr></thead><tbody>${rows}</tbody></table></div>
       </div>`);
+
+    const sheet = m.querySelector('.sheet');
+    if (sheet) sheet.classList.add('learnSheet');
+
     m.querySelector('#mClose').onclick = () => this.closeModal();
-    m.querySelector('#lCond').onclick = (e) => { const c = e.target.closest('button')?.dataset.c; if (c && c !== this.learnCond) { this.learnCond = c; this.showLearning(fromResults); } };
-    const back = m.querySelector('#mBack'); if (back) back.onclick = () => { const e = sim.events.slice().reverse().find((x) => x.type === 'sessionEnd'); if (e) this.results(e.id, e.cls); };
-    m.querySelector('tbody').onclick = (e) => { const tr = e.target.closest('tr'); if (tr) { this.dir.setFocus(sim.cars[+tr.dataset.i]); this.showLearning(fromResults); } };
+    m.querySelector('#lCond').onclick = (e) => {
+      const c = e.target.closest('button')?.dataset.c;
+      if (c && c !== this.learnCond) {
+        this.learnCond = c;
+        this.showLearning(fromResults);
+      }
+    };
+    const back = m.querySelector('#mBack');
+    if (back) back.onclick = () => {
+      const e = sim.events.slice().reverse().find((x) => x.type === 'sessionEnd');
+      if (e) this.results(e.id, e.cls);
+    };
+    m.querySelector('tbody').onclick = (e) => {
+      const tr = e.target.closest('tr');
+      if (tr && tr.dataset.i != null) {
+        const targetCar = sim.cars[+tr.dataset.i];
+        if (targetCar) {
+          this.dir.setFocus(targetCar);
+          const currentScroll = sheet ? sheet.scrollTop : 0;
+          this.showLearning(fromResults);
+          const newSheet = document.querySelector('.sheet');
+          if (newSheet) newSheet.scrollTop = currentScroll;
+        }
+      }
+    };
+
     this.drawLapChart(m.querySelector('#lchart'), wetC);
     this.drawLineChart(m.querySelector('#lline'), wetC);
     this.drawCommitChart(m.querySelector('#lcommit'));
   }
 
-  // límite de agarre que se atreve a usar en cada curva: seco (color del equipo) y mojado (azul)
   drawCommitChart(cv) {
-    const g = cv.getContext('2d'), W = cv.width, H = cv.height, car = this.dir.focus, b = car.brain, T = this.T;
-    const n = b.commit.length, L = 60, R = 16, Tp = 18, B = 56, bw = (W - L - R) / n;
-    const lo = 0.8, hi = 1.02, Y = (v) => Tp + (1 - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * (H - Tp - B);
-    g.font = '600 20px "Titillium Web"'; g.fillStyle = '#a3a6b4'; g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 1;
-    for (let k = 0; k <= 4; k++) { const v = lo + ((hi - lo) * k) / 4, y = Y(v); g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke(); g.fillText(Math.round(v * 100) + '%', 4, y + 6); }
-    const dryC = car.team.c1 === '#141414' ? '#20E83B' : car.team.c1;
-    for (let z = 0; z < n; z++) {
-      const x = L + z * bw, w2 = Math.max(3, bw * 0.36);
-      g.fillStyle = dryC; g.fillRect(x + bw * 0.12, Y(b.commit[z]), w2, H - B - Y(b.commit[z]));
-      if (b.wet) { g.fillStyle = '#4FC3F7'; g.fillRect(x + bw * 0.12 + w2 + 2, Y(b.wet.commit[z]), w2, H - B - Y(b.wet.commit[z])); }
-      const nm = (T.corners[z]?.name || '').replace(/^Curva\s*/i, 'T');
-      g.fillStyle = '#a3a6b4'; g.font = '600 16px "Titillium Web"'; g.save(); g.translate(x + bw * 0.5, H - B + 14); g.rotate(-0.6); g.fillText(nm.slice(0, 10), -40, 10); g.restore();
+    if (!cv) return;
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height;
+    const car = this.dir.focus || this.sim.cars[0], b = car.brain, T = this.T;
+    g.clearRect(0, 0, W, H);
+
+    const teamAccent = (tm) => {
+      if (!tm) return '#20E83B';
+      const c = tm.c1;
+      if (c === '#141414' || c === '#111111' || c === '#1C1C1C') return '#20E83B';
+      if (c === '#1B2A6B' || c === '#0B2A5B') return '#4F86F7';
+      if (c === '#0A5C45') return '#00D09C';
+      if (c === '#C9CED3' || c === '#EDEDED' || c === '#F2F2F2') return '#E0E3E8';
+      return c || '#FF8000';
+    };
+
+    const n = b.commit.length;
+    const L = 65, R = 25, Tp = 35, B = 50;
+    const bw = (W - L - R) / n;
+    const lo = 0.75, hi = 1.05;
+    const Y = (v) => Tp + (1 - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * (H - Tp - B);
+
+    g.font = '600 13px "Titillium Web", sans-serif';
+    g.fillStyle = '#8e92a4';
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
+    g.lineWidth = 1;
+
+    const ySteps = [0.80, 0.85, 0.90, 0.95, 1.00, 1.05];
+    for (const v of ySteps) {
+      const y = Y(v);
+      g.beginPath();
+      g.moveTo(L, y);
+      g.lineTo(W - R, y);
+      g.stroke();
+      g.fillText(Math.round(v * 100) + '%', 15, y + 4);
     }
-    g.font = '600 18px "Titillium Web"'; g.fillStyle = dryC; g.fillRect(W - 260, 8, 14, 14); g.fillStyle = '#d9d9df'; g.fillText('seco', W - 240, 21);
-    g.fillStyle = '#4FC3F7'; g.fillRect(W - 170, 8, 14, 14); g.fillStyle = '#d9d9df'; g.fillText(b.wet ? 'mojado' : 'mojado (aún no)', W - 150, 21);
+
+    const y100 = Y(1.0);
+    g.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    g.setLineDash([4, 4]);
+    g.beginPath();
+    g.moveTo(L, y100);
+    g.lineTo(W - R, y100);
+    g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    g.font = '700 11.5px "Titillium Web", sans-serif';
+    g.fillText('100% (Límite nominal)', W - R - 130, y100 - 5);
+
+    const dryColor = teamAccent(car.team);
+    const wetColor = '#38BDF8';
+    const hasWet = !!b.wet;
+
+    for (let z = 0; z < n; z++) {
+      const x = L + z * bw;
+      const wBar = Math.max(6, hasWet ? bw * 0.36 : bw * 0.55);
+      const gap = hasWet ? 3 : 0;
+      const yBase = H - B;
+
+      const vDry = b.commit[z] || 0.88;
+      const yDry = Y(vDry);
+      const hDry = Math.max(6, yBase - yDry);
+      const xDry = hasWet ? x + (bw - (wBar * 2 + gap)) / 2 : x + (bw - wBar) / 2;
+
+      g.fillStyle = dryColor;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(xDry, yDry, wBar, hDry, [3, 3, 0, 0]);
+      else g.rect(xDry, yDry, wBar, hDry);
+      g.fill();
+
+      if (hasWet) {
+        const vWet = b.wet.commit[z] || 0.85;
+        const yWet = Y(vWet);
+        const hWet = Math.max(6, yBase - yWet);
+        const xWet = xDry + wBar + gap;
+
+        g.fillStyle = wetColor;
+        g.beginPath();
+        if (g.roundRect) g.roundRect(xWet, yWet, wBar, hWet, [3, 3, 0, 0]);
+        else g.rect(xWet, yWet, wBar, hWet);
+        g.fill();
+      }
+
+      const cName = `T${z + 1}`;
+      g.fillStyle = '#d9d9df';
+      g.font = '700 13px "Titillium Web", sans-serif';
+      g.textAlign = 'center';
+      g.fillText(cName, x + bw / 2, H - B + 18);
+
+      const rawCorner = T.corners[z]?.name || '';
+      const isNamed = rawCorner && !/^Curva\s*\d+$/i.test(rawCorner) && !/^T\d+$/i.test(rawCorner);
+      if (isNamed && n <= 14) {
+        g.fillStyle = '#8e92a4';
+        g.font = '600 10px "Titillium Web", sans-serif';
+        const shortName = rawCorner.replace(/^Curva\s*/i, '').slice(0, 8);
+        g.fillText(shortName, x + bw / 2, H - B + 32);
+      }
+    }
+    g.textAlign = 'left';
+
+    const legX = W - 280, legY = 16;
+    g.fillStyle = dryColor;
+    g.beginPath();
+    if (g.roundRect) g.roundRect(legX, legY, 12, 12, 2);
+    else g.fillRect(legX, legY, 12, 12);
+    g.fill();
+    g.fillStyle = '#d9d9df';
+    g.font = '700 13px "Titillium Web", sans-serif';
+    g.fillText('☀️ Seco', legX + 18, legY + 11);
+
+    g.fillStyle = wetColor;
+    g.beginPath();
+    if (g.roundRect) g.roundRect(legX + 110, legY, 12, 12, 2);
+    else g.fillRect(legX + 110, legY, 12, 12);
+    g.fill();
+    g.fillStyle = '#d9d9df';
+    g.fillText(hasWet ? '🌧️ Mojado' : '🌧️ Mojado (estimado)', legX + 128, legY + 11);
   }
 
   drawLapChart(cv, wet = false) {
+    if (!cv) return;
     const g = cv.getContext('2d'), W = cv.width, H = cv.height, sim = this.sim;
-    // mejor vuelta acumulada: baja cuando el piloto aprende algo que le hace más rápido
-    const series = sim.cars.map((c) => { let m = Infinity; return { c, pts: c.brain.lapHist.filter((l) => !!l.wet === wet).map((l) => (m = Math.min(m, l.t))) }; }).filter((s) => s.pts.length > 1);
-    if (!series.length) { g.fillStyle = '#a3a6b4'; g.font = '600 28px "Titillium Web"'; g.fillText(wet ? 'Aún no hay vueltas limpias en mojado.' : 'Aún no hay vueltas limpias.', 30, 60); return; }
-    const all = series.flatMap((s) => s.pts); const lo = Math.min(...all), hi = Math.min(Math.max(...all), lo + 6);
-    const maxN = Math.max(...series.map((s) => s.pts.length));
-    const L = 70, R = 20, Tp = 20, B = 50;
-    const X = (i) => L + (i / Math.max(1, maxN - 1)) * (W - L - R), Y = (t) => Tp + ((Math.min(t, hi) - lo) / (hi - lo || 1)) * (H - Tp - B);
-    g.strokeStyle = 'rgba(255,255,255,0.08)'; g.fillStyle = '#a3a6b4'; g.font = '600 20px "Titillium Web"'; g.lineWidth = 1;
-    for (let k = 0; k <= 4; k++) { const t = lo + ((hi - lo) * k) / 4; const y = Y(t); g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke(); g.fillText(fmtLap(t).slice(0, 7), 4, y + 6); }
-    g.fillText('vueltas limpias →', W - 190, H - 12);
-    for (const s of series) {
-      const f = s.c === this.dir.focus;
-      g.strokeStyle = f ? '#ffffff' : s.c.team.c1; g.globalAlpha = f ? 1 : 0.55; g.lineWidth = f ? 4 : 2;
-      g.beginPath(); s.pts.forEach((t, i) => (i ? g.lineTo(X(i), Y(t)) : g.moveTo(X(i), Y(t)))); g.stroke();
-      if (f) { const i = s.pts.length - 1; g.fillStyle = '#fff'; g.beginPath(); g.arc(X(i), Y(s.pts[i]), 6, 0, 7); g.fill(); g.font = '900 22px "Titillium Web"'; g.fillText(s.c.code, X(i) - 50, Y(s.pts[i]) - 12); }
+    g.clearRect(0, 0, W, H);
+
+    const teamAccent = (tm) => {
+      if (!tm) return '#20E83B';
+      const c = tm.c1;
+      if (c === '#141414' || c === '#111111' || c === '#1C1C1C') return '#20E83B';
+      if (c === '#1B2A6B' || c === '#0B2A5B') return '#4F86F7';
+      if (c === '#0A5C45') return '#00D09C';
+      if (c === '#C9CED3' || c === '#EDEDED' || c === '#F2F2F2') return '#E0E3E8';
+      return c || '#FF8000';
+    };
+
+    const series = sim.cars.map((c) => {
+      const lps = (c.brain.lapHist || []).filter((l) => !!l.wet === wet);
+      let m = Infinity;
+      const pts = lps.map((l) => (m = Math.min(m, l.t)));
+      return { c, pts, raw: lps.map((l) => l.t) };
+    }).filter((s) => s.pts.length > 0);
+
+    if (!series.length) {
+      g.fillStyle = '#161822';
+      g.fillRect(0, 0, W, H);
+      g.fillStyle = '#6b7280';
+      g.font = '600 22px "Titillium Web", sans-serif';
+      g.textAlign = 'center';
+      g.fillText(wet ? '🌧️ Aún no hay vueltas cronometradas en mojado.' : '⏱️ Aún no hay vueltas limpias registradas.', W / 2, H / 2 - 10);
+      g.font = '400 16px "Titillium Web", sans-serif';
+      g.fillStyle = '#4b5563';
+      g.fillText('Deja rodar la sesión para observar el progreso y evolución de los pilotos.', W / 2, H / 2 + 20);
+      g.textAlign = 'left';
+      return;
     }
+
+    const allPts = series.flatMap((s) => s.pts);
+    const minT = Math.min(...allPts);
+    const maxT = Math.max(...allPts);
+    const lo = Math.max(30, minT - 0.4);
+    const hi = Math.max(lo + 2.5, Math.min(maxT + 0.4, lo + 6.0));
+    const maxLaps = Math.max(3, ...series.map((s) => s.pts.length));
+
+    const L = 80, R = 110, Tp = 30, B = 45;
+    const X = (i) => L + (i / Math.max(1, maxLaps - 1)) * (W - L - R);
+    const Y = (t) => Tp + ((Math.max(lo, Math.min(hi, t)) - lo) / (hi - lo)) * (H - Tp - B);
+
+    g.strokeStyle = 'rgba(255,255,255,0.06)';
+    g.lineWidth = 1;
+    g.fillStyle = '#8e92a4';
+    g.font = '600 15px "Titillium Web", sans-serif';
+
+    const nGrids = 4;
+    for (let k = 0; k <= nGrids; k++) {
+      const t = lo + ((hi - lo) * k) / nGrids;
+      const y = Y(t);
+      g.beginPath();
+      g.moveTo(L, y);
+      g.lineTo(W - R + 20, y);
+      g.stroke();
+      g.fillText(fmtLap(t).slice(0, 8), 10, y + 5);
+    }
+
+    g.font = '600 14px "Titillium Web", sans-serif';
+    g.fillStyle = '#6b7280';
+    for (let i = 0; i < maxLaps; i++) {
+      const x = X(i);
+      if (maxLaps <= 15 || i % 2 === 0 || i === maxLaps - 1) {
+        g.beginPath();
+        g.moveTo(x, Tp);
+        g.lineTo(x, H - B);
+        g.stroke();
+        g.fillText(`V${i + 1}`, x - 8, H - B + 22);
+      }
+    }
+
+    g.font = '700 13px "Titillium Web", sans-serif';
+    g.fillStyle = '#8e92a4';
+    g.fillText('▲ MÁS RÁPIDO', 10, Tp - 10);
+    g.fillText('VUELTAS CRONOMETRADAS →', W - R - 130, H - 10);
+
+    const focusCar = this.dir.focus || sim.cars[0];
+
+    for (const s of series) {
+      if (s.c === focusCar) continue;
+      g.strokeStyle = teamAccent(s.c.team);
+      g.globalAlpha = 0.22;
+      g.lineWidth = 1.5;
+      g.beginPath();
+      s.pts.forEach((t, i) => (i ? g.lineTo(X(i), Y(t)) : g.moveTo(X(i), Y(t))));
+      g.stroke();
+    }
+
+    const focusSeries = series.find((s) => s.c === focusCar);
+    if (focusSeries && focusSeries.pts.length) {
+      const accent = teamAccent(focusCar.team);
+      g.globalAlpha = 1;
+      g.strokeStyle = '#FFFFFF';
+      g.lineWidth = 4;
+      g.beginPath();
+      focusSeries.pts.forEach((t, i) => (i ? g.lineTo(X(i), Y(t)) : g.moveTo(X(i), Y(t))));
+      g.stroke();
+
+      focusSeries.pts.forEach((t, i) => {
+        const px = X(i), py = Y(t);
+        g.fillStyle = accent;
+        g.beginPath();
+        g.arc(px, py, 5, 0, Math.PI * 2);
+        g.fill();
+        g.strokeStyle = '#FFFFFF';
+        g.lineWidth = 2;
+        g.stroke();
+      });
+
+      const lastIdx = focusSeries.pts.length - 1;
+      const endX = X(lastIdx), endY = Y(focusSeries.pts[lastIdx]);
+      const bestTimeStr = fmtLap(focusSeries.pts[lastIdx]).slice(0, 8);
+      const badgeText = `${focusCar.code}  ${bestTimeStr}`;
+      g.font = '900 14px "Titillium Web", sans-serif';
+      const textW = g.measureText(badgeText).width;
+
+      g.fillStyle = 'rgba(18, 18, 25, 0.9)';
+      g.beginPath();
+      if (g.roundRect) g.roundRect(endX + 8, endY - 14, textW + 16, 26, 6);
+      else g.fillRect(endX + 8, endY - 14, textW + 16, 26);
+      g.fill();
+      g.strokeStyle = accent;
+      g.lineWidth = 1.5;
+      g.stroke();
+
+      g.fillStyle = '#FFFFFF';
+      g.fillText(badgeText, endX + 16, endY + 4);
+    }
+
     g.globalAlpha = 1;
   }
 
   drawLineChart(cv, wet = false) {
-    const g = cv.getContext('2d'), W = cv.width, H = cv.height, T = this.T, car = this.dir.focus;
+    if (!cv) return;
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height, T = this.T;
+    const car = this.dir.focus || this.sim.cars[0];
     const kb = wet ? car.brain.wet : car.brain;
-    if (!kb) { g.fillStyle = '#a3a6b4'; g.font = '600 28px "Titillium Web"'; g.fillText('Aún no tiene trazada de mojado.', 30, 60); return; }
+    g.clearRect(0, 0, W, H);
+
+    if (!kb) {
+      g.fillStyle = '#161822';
+      g.fillRect(0, 0, W, H);
+      g.fillStyle = '#6b7280';
+      g.font = '600 20px "Titillium Web", sans-serif';
+      g.textAlign = 'center';
+      g.fillText('🌧️ Aún no hay datos de trazada en mojado.', W / 2, H / 2);
+      g.textAlign = 'left';
+      return;
+    }
+
+    const teamAccent = (tm) => {
+      if (!tm) return '#20E83B';
+      const c = tm.c1;
+      if (c === '#141414' || c === '#111111' || c === '#1C1C1C') return '#20E83B';
+      if (c === '#1B2A6B' || c === '#0B2A5B') return '#4F86F7';
+      if (c === '#0A5C45') return '#00D09C';
+      if (c === '#C9CED3' || c === '#EDEDED' || c === '#F2F2F2') return '#E0E3E8';
+      return c || '#FF8000';
+    };
+
     const line = buildLine(T, kb, new Float32Array(T.N));
-    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
-    for (let i = 0; i < T.N; i += 5) { x0 = Math.min(x0, T.x[i]); x1 = Math.max(x1, T.x[i]); z0 = Math.min(z0, T.z[i]); z1 = Math.max(z1, T.z[i]); }
-    // zoom en la curva más lenta con más diferencia entre trazadas
+
     let bz = T.zones[0], bd = -1;
-    for (const z of T.zones) { let d = 0; for (let q = 0; q < z.len; q += 5) { const i = T.idx(z.a + q); d += Math.abs(line[i] - T.ideal[i]); } if (d / z.len > bd) { bd = d / z.len; bz = z; } }
-    const P = [0, 0, 0]; let cx0 = 1e9, cx1 = -1e9, cz0 = 1e9, cz1 = -1e9;
-    for (let q = 0; q < bz.len; q += 2) { T.pos(bz.a + q, 0, P); cx0 = Math.min(cx0, P[0]); cx1 = Math.max(cx1, P[0]); cz0 = Math.min(cz0, P[2]); cz1 = Math.max(cz1, P[2]); }
-    const pad = 30; const sc = Math.min((W - 2 * pad) / (cx1 - cx0 + 30), (H - 2 * pad - 30) / (cz1 - cz0 + 30));
+    for (const z of T.zones) {
+      let d = 0;
+      for (let q = 0; q < z.len; q += 5) {
+        const i = T.idx(z.a + q);
+        d += Math.abs(line[i] - T.ideal[i]);
+      }
+      if (d / Math.max(1, z.len) > bd) {
+        bd = d / Math.max(1, z.len);
+        bz = z;
+      }
+    }
+
+    const P = [0, 0, 0];
+    let cx0 = 1e9, cx1 = -1e9, cz0 = 1e9, cz1 = -1e9;
+    for (let q = -30; q <= bz.len + 30; q += 2) {
+      T.pos(bz.a + q, 0, P);
+      cx0 = Math.min(cx0, P[0]); cx1 = Math.max(cx1, P[0]);
+      cz0 = Math.min(cz0, P[2]); cz1 = Math.max(cz1, P[2]);
+    }
+
+    const pad = 40;
+    const sc = Math.min((W - 2 * pad) / Math.max(20, cx1 - cx0 + 20), (H - 2 * pad - 20) / Math.max(20, cz1 - cz0 + 20));
     const mx = (cx0 + cx1) / 2, mz = (cz0 + cz1) / 2;
     const XY = (x, z) => [W / 2 + (x - mx) * sc, H / 2 + (z - mz) * sc];
-    const strokeLine = (fn, col, w, dash = []) => {
-      g.strokeStyle = col; g.lineWidth = w; g.setLineDash(dash); g.beginPath();
-      for (let q = -40; q <= bz.len + 40; q += 2) { T.pos(bz.a + q, fn(T.idx(bz.a + q)), P); const [x, y] = XY(P[0], P[2]); q === -40 ? g.moveTo(x, y) : g.lineTo(x, y); }
-      g.stroke(); g.setLineDash([]);
+
+    const strokePath = (fn, col, w, dash = []) => {
+      g.strokeStyle = col;
+      g.lineWidth = w;
+      g.setLineDash(dash);
+      g.beginPath();
+      for (let q = -40; q <= bz.len + 40; q += 2) {
+        T.pos(bz.a + q, fn(T.idx(bz.a + q)), P);
+        const [x, y] = XY(P[0], P[2]);
+        if (q === -40) g.moveTo(x, y);
+        else g.lineTo(x, y);
+      }
+      g.stroke();
+      g.setLineDash([]);
     };
-    strokeLine(() => 0, '#3a3c44', T.halfW * 2 * sc);
-    strokeLine(() => T.halfW, '#d9d9df', 2); strokeLine(() => -T.halfW, '#d9d9df', 2);
-    strokeLine((i) => T.ideal[i], '#a3a6b4', 3, [8, 8]);
-    strokeLine((i) => line[i], car.team.c1 === '#141414' ? '#20E83B' : car.team.c1, 5);
-    g.fillStyle = '#fff'; g.font = '900 26px "Titillium Web"'; g.fillText(bz.corner.name, 16, 34);
-    g.font = '600 20px "Titillium Web"'; g.fillStyle = '#a3a6b4'; g.fillText('discontinua: trazada ideal (la goma) · color: la suya', 16, H - 14);
+
+    strokePath(() => 0, '#262835', T.halfW * 2 * sc);
+    strokePath(() => T.halfW, 'rgba(255,255,255,0.25)', 2);
+    strokePath(() => -T.halfW, 'rgba(255,255,255,0.25)', 2);
+    strokePath((i) => T.ideal[i], 'rgba(255,255,255,0.45)', 3, [8, 6]);
+    const drvCol = teamAccent(car.team);
+    strokePath((i) => line[i], drvCol, 5);
+
+    const cName = bz.corner?.name || `Curva ${bz.id + 1}`;
+    g.fillStyle = '#FFFFFF';
+    g.font = '900 20px "Titillium Web", sans-serif';
+    g.fillText(cName, 16, 28);
+
+    g.fillStyle = '#8e92a4';
+    g.font = '600 13px "Titillium Web", sans-serif';
+    g.fillText(`Desviación máx: ${(bd).toFixed(2)} m frente a la trazada óptima`, 16, 48);
+
+    g.font = '600 13px "Titillium Web", sans-serif';
+    g.fillStyle = '#8e92a4';
+    g.fillText('--- Trazada ideal (goma) · ━━━ Trazada elegida por ' + car.code, 16, H - 12);
   }
 }
 

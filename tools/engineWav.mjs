@@ -18,7 +18,7 @@ while (t < 16) {
   let [g, rpm] = kmh > 1 ? rpmAt(kmh) : [0, 4800];
   if (g !== g0) { if (g > g0) cutT = 0.05; g0 = g; }
   const cut = cutT > 0 ? 1 : 0; cutT -= dt;
-  const buf = new Float32Array(blk); eng(buf, blk, 7000 * Math.pow(rpm / 7000, 1.8), load, cut); samples.push(buf); t += dt;   // (misma curva de vueltas que audio.js)
+  const buf = new Float32Array(blk); eng(buf, blk, 7000 * Math.pow(rpm / 7000, 2.1), load, cut); samples.push(buf); t += dt;   // (misma curva de vueltas que audio.js)
 }
 const N = samples.length * blk, wav = Buffer.alloc(44 + N * 2);
 wav.write('RIFF', 0); wav.writeUInt32LE(36 + N * 2, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
