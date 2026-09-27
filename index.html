@@ -362,6 +362,12 @@ canvas.chart { width: 100%; height: 260px; display: block; }
   #battle { bottom: 214px; }
   .grp button { padding: 0 8px; height: 36px; font-size: 12px; }
 }
+/* torre: las 22 filas caben siempre por encima de la ficha del piloto (en 720 px de alto se tapaban las 6 últimas) */
+@media (max-height: 940px) {
+  #rows li { height: clamp(16px, calc((100vh - 350px) / 22), 24px); font-size: clamp(11.5px, calc((100vh - 350px) / 22 * 0.62), 14px); }
+  #rows .tyre { width: 14px; height: 14px; border-width: 2px; font-size: 7px; }
+  #tower .head { height: 38px; }
+}
 @media (max-width: 1500px) { .grp button { padding: 0 7px; font-size: 11.5px; } .grp .lbl { padding: 0 6px; } }
 @media (prefers-reduced-motion: reduce) { .note, #goBanner, #lapPop { animation: none; } }
   #rows li.fin { grid-template-columns: 26px 4px 44px 1fr 54px 22px 13px; }
