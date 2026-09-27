@@ -50,6 +50,7 @@ function hash(x) { const s = Math.sin(x * 127.1) * 43758.5453; return s - Math.f
 
 export function buildWorld(T, scene, renderer, quality = 'high') {
   const world = { update: () => {}, screens: [], lights: [], marshal: [], crews: [], overheads: [] };
+  world.scene = scene;
   const meta = T.meta || {}, night = !!meta.night, urban = !!meta.urban;
   world.night = night; world.urban = urban;
   const STEP = 2;

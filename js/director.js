@@ -575,7 +575,7 @@ export class Director {
         }
         this.droneT += dt;
         this.droneLosT -= dt;
-        if (this.droneLosT <= 0) { this.droneLosT = 0.2; this.droneBlocked = this.world.losBlocked(cam.position, v3.copy(carPos).setY(carPos.y + 0.8)); }
+        if (this.droneLosT <= 0) { this.droneLosT = 0.2; this.droneBlocked = this.world.losBlocked(cam.position, v3.copy(carPos).setY(carPos.y + 0.8)) || this.sceneBlocked(carPos, cam.position); }
         this.droneLift = Math.max(0, Math.min(30, this.droneLift + (this.droneBlocked ? 14 : -3) * dt));
         this.droneAngle += this.droneDir * dt * (this.droneBlocked ? 4 : 1);
         const dist = 24 + 6 * Math.sin(this.droneT * 0.35);
@@ -654,5 +654,17 @@ export class Director {
     this.fov = this.first ? fov : lerp(this.fov, fov, this.type === 'track' ? 1 - Math.exp(-dt * 4) : 1);
     if (Math.abs(cam.fov - this.fov) > 0.01) { cam.fov = this.fov; cam.updateProjectionMatrix(); }
     this.first = false;
+  }
+
+  // rayo real del coche a la cámara contra la escena (edificios grandes, pasarelas…: los oclusores simples no los tienen)
+  sceneBlocked(from, to) {
+    const sc = this.world.scene; if (!sc) return false;
+    if (!this.carObjs) { this.carObjs = new Set(); this.vis.forEach((v) => v.root.traverse((o) => this.carObjs.add(o))); }
+    const rc = this.rc || (this.rc = new THREE.Raycaster());
+    const o = new THREE.Vector3(from.x, from.y + 0.8, from.z), dir = new THREE.Vector3().subVectors(to, o); const L = dir.length();
+    rc.set(o, dir.normalize()); rc.near = 3; rc.far = L; rc.camera = this.cam;
+    const hits = rc.intersectObjects(sc.children, true);
+    return hits.some((h) => !this.carObjs.has(h.object) && h.object.visible && !h.object.isSprite && !h.object.isPoints && !h.object.isLine &&
+      !(h.object.material && h.object.material.transparent && h.object.material.opacity < 0.5));
   }
 }
