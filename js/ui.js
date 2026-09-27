@@ -34,8 +34,8 @@ export class UI {
       <div class="grp"><button id="bAuto" class="on" title="Realización automática (A)">AUTO</button><button id="bAutoD" title="Automática pegada al piloto elegido: solo cambia de plano (P)">AUTO PILOTO</button>${camBtns}</div>
       <div class="grp"><button id="bPrev" title="Piloto anterior ([)">‹</button><span class="lbl" id="focusLbl">—</span><button id="bNext" title="Piloto siguiente (])">›</button></div>
       <div class="spacer"></div>
-      <div class="grp" id="speeds">${[0, 1, 2, 4, 8, 16, 32].map((s) => `<button data-speed="${s}">${s === 0 ? 'II' : s + '×'}</button>`).join('')}</div>
- <div class="grp"><button id="bSound" title="Sonido de motor (M)">Sonido</button><button id="bSkip" title="Simular el resto de la sesión a máxima velocidad">Saltar sesión</button><button id="bLearn" class="red" title="Qué han aprendido los pilotos (L)">IA · Aprendizaje</button></div>`;
+      <div class="grp" id="speeds"><button id="bReplay" title="Repetición de los últimos 12 s del piloto enfocado (R)">↺ Repetir</button>${[0, 1, 2, 4, 8, 16, 32].map((s) => `<button data-speed="${s}">${s === 0 ? 'II' : s + '×'}</button>`).join('')}</div>
+ <div class="grp"><button id="bSound" title="Sonido de motor (M)">Sonido</button><button id="bSkip" title="Simular el resto de la sesión a máxima velocidad">Saltar</button><button id="bLearn" class="red" title="Qué han aprendido los pilotos (L)">IA · Aprendizaje</button></div>`;
     c.querySelectorAll('[data-cam]').forEach((b) => (b.onclick = () => this.dir.setType(b.dataset.cam)));
     c.querySelectorAll('[data-speed]').forEach((b) => (b.onclick = () => this.app.setSpeed(+b.dataset.speed)));
     $('bAuto').onclick = () => this.dir.setAuto(!(this.dir.auto && !this.dir.lockFocus));
@@ -45,6 +45,7 @@ export class UI {
     $('bSkip').onclick = () => this.app.skip();
     $('bSound').onclick = () => { this.app.audio.toggle(); this.syncButtons(); };
     $('bLearn').onclick = () => this.showLearning();
+    $('bReplay').onclick = () => { const R = this.app.replay; if (R?.active) R.stop(); else R?.replayLast(); };
     window.addEventListener('keydown', (e) => {
       if (e.target.tagName === 'INPUT') return;
       const k = e.key.toLowerCase();
@@ -57,6 +58,7 @@ export class UI {
       else if (k === '+' || k === '=') this.app.setSpeed(Math.min(32, Math.max(1, this.app.speed * 2)));
       else if (k === '-') this.app.setSpeed(Math.max(1, this.app.speed / 2));
       else if (k === 'l') this.showLearning();
+      else if (k === 'r') { const R = this.app.replay; if (R?.active) R.stop(); else R?.replayLast(); }
       else if (k === 'm') { this.app.audio.toggle(); this.syncButtons(); }
       else if (k === 'h') $('hud').classList.toggle('hidden');
       else if (k === 'escape') { if (document.querySelector('.modal')) this.closeModal(); else this.pauseMenu(); }

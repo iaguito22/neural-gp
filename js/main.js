@@ -11,6 +11,7 @@ import * as TX from './textures.js';
 import { EngineAudio } from './audio.js';
 import { Radio } from './radio.js';
 import { Manager } from './manager.js';
+import { Replay } from './replay.js';
 import { TEAMS } from './teams.js';
 import { buildWeather } from './weather.js';
 import { buildFx } from './fx.js';
@@ -36,7 +37,7 @@ async function main() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === 'low' ? 0.85 : 1.25));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = CIRCUITS[trackId].night ? 1.05 : 0.82;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = CIRCUITS[trackId].night ? 1.05 : CIRCUITS[trackId].sunset ? 0.95 : 0.82;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   TX.setAnisotropy(Math.min(8, renderer.capabilities.getMaxAnisotropy()));
   const scene = new THREE.Scene();
@@ -89,6 +90,7 @@ async function main() {
   };
   const ui = new UI(app);
   const radio = new Radio(sim, director, app);
+  const replay = app.replay = new Replay(app, sim, director);
 
   function startSession(id) {
     sim.startSession(id);
@@ -174,22 +176,26 @@ async function main() {
       const ss = sim.session;
       const prog = ss.id === 'RACE' ? (sim.raceOrder?.[0]?.lap ?? 0) / sim.raceLaps : sim.t / (ss.dur + 60);
       const bar = document.querySelector('#skipBar i'); if (bar) bar.style.width = `${Math.min(100, prog * 100)}%`;
+    } else if (replay.active) {
+      acc = 0;                                             // repetición: la carrera se congela
     } else if (sim.session && !sim.session.done) {
       acc += dt * app.speed;
       let n = 0; const maxSteps = 60 * 40;
       while (acc >= DT && n < maxSteps) { sim.step(); acc -= DT; n++; }
       if (n >= maxSteps) acc = 0;
     }
-    simLead = app.skipping || !sim.session || sim.session.done ? 0 : Math.max(0, Math.min(DT, acc));
+    if (!app.skipping) replay.record();
+    const replaying = replay.update(dt);
+    simLead = replaying || app.skipping || !sim.session || sim.session.done ? 0 : Math.max(0, Math.min(DT, acc));
     if (app.skipping && skipFrame !== 0) { ui.update(dt); return; }
-    sim.cars.forEach((car, k) => place(car, visuals[k], dt * (app.speed || 0), dt));
+    sim.cars.forEach((car, k) => place(car, visuals[k], dt * (replaying ? replay.rate : app.speed || 0), dt));
     director.update(dt);
     weatherFx.update(dt, sim, director.type, visuals);
     fx.update(dt);
     focusPos.copy(visuals[director.focus.i].root.position);
     world.update(dt, sim, focusPos, camera.position);
     scenery.update(dt, focusPos, camera.position);
-    app.audio.update(director.focus, director.type, camera, focusPos, app.skipping ? 99 : app.speed, sim, visuals);
+    app.audio.update(director.focus, director.type, camera, focusPos, app.skipping ? 99 : replaying ? 1 : app.speed, sim, visuals);
     radio.update(dt, app.skipping ? 99 : app.speed);
     app.manager?.update(dt);
     ui.update(dt);
