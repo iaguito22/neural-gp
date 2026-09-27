@@ -10,7 +10,7 @@ import { TEAMS } from './teams.js';
 const SESSIONS_CUT = { Q1: SESSIONS.Q1.cut, Q2: SESSIONS.Q2.cut, Q3: 0 };
 
 export const CAM_TYPES = ['chase', 'cockpit', 'tcam', 'nose', 'rear', 'heli', 'track', 'free'];
-export const CAM_LABEL = { chase: 'Exterior', cockpit: 'Cockpit', tcam: 'T-Cam', nose: 'Morro', rear: 'Trasera', heli: 'Heli', track: 'Pista', free: 'Libre' };
+export const CAM_LABEL = { chase: 'Exterior', cockpit: 'Cockpit', tcam: 'T-Cam', nose: 'Morro', rear: 'Trasera', heli: 'Dron', track: 'Pista', free: 'Libre' };
 
 // peso de una posición: arriba vale mucho más (victoria, podio, puntos)
 const posW = (p) => (p === 1 ? 1 : p <= 3 ? 0.85 : p <= 6 ? 0.7 : p <= 10 ? 0.55 : p <= 15 ? 0.33 : 0.22);
@@ -567,14 +567,27 @@ export class Director {
             cam.up.set(0, 1, 0); this.smoothLook.copy(this.pc).addScaledVector(f2, 18); cam.lookAt(this.smoothLook); fov = 48; break;
           }
         }
-        const yaw = Math.atan2(fwd.x, fwd.z);
-        if (this.first || this.hyaw == null) this.hyaw = yaw;
-        let dy = yaw - this.hyaw; dy -= Math.round(dy / (2 * Math.PI)) * 2 * Math.PI;
-        this.hyaw += dy * (1 - Math.exp(-dt * 0.8));
-        const f2 = v2.set(Math.sin(this.hyaw), 0, Math.cos(this.hyaw)), side = v3.set(f2.z, 0, -f2.x);
-        cam.position.copy(carPos).addScaledVector(f2, -42).addScaledVector(side, 22); cam.position.y += 40;
-        cam.up.set(0, 1, 0); this.smoothLook.copy(carPos).addScaledVector(f2, 8);
-        cam.lookAt(this.smoothLook); fov = 36; break;
+        if (this.first || this.droneAngle == null) {
+          this.droneAngle = Math.random() * Math.PI * 2;
+          this.droneDir = (Math.random() < 0.5 ? 1 : -1) * (0.12 + Math.random() * 0.08);
+          this.droneT = Math.random() * 100;
+        }
+        this.droneT += dt;
+        this.droneAngle += this.droneDir * dt;
+        const dist = 24 + 6 * Math.sin(this.droneT * 0.35);
+        const h = Math.max(3, 13 + 5 * Math.sin(this.droneT * 0.25 + 1.0));
+        cam.position.set(
+          carPos.x + Math.sin(this.droneAngle) * dist,
+          carPos.y + h,
+          carPos.z + Math.cos(this.droneAngle) * dist
+        );
+        const lookTarget = v2.copy(carPos).addScaledVector(fwd, 4).add(v3.set(0, 0.6, 0));
+        if (this.first) this.smoothLook.copy(lookTarget);
+        else this.smoothLook.lerp(lookTarget, 1 - Math.exp(-dt * 8));
+        cam.up.set(0, 1, 0);
+        cam.lookAt(this.smoothLook);
+        fov = 50;
+        break;
       }
       case 'track': {
         const T = this.T, s = this.focus.s;

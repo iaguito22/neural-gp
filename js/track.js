@@ -315,7 +315,10 @@ function buildPit(T) {
   for (let i = 0; i < 11; i++) pit.boxes.push({ s: T.wrap(-250 + i * 55), d: PIT_D - 3.5 });
   pit.fastD = PIT_D + 2.5;
   pit.edgeD = -HALF_W + 1.9;                    // centro del carril cuando aún va pegado al borde de la pista
-  pit.decide = T.wrap(pit.entryA - 120);        // desde aquí el coche que entra se pega a la derecha
+  // desde aquí el coche que entra se pega a la derecha: todo lo que dé la recta (120-250 m), para que no cruce la pista de golpe
+  let back = 120;
+  while (back < 250 && Math.abs(T.k[T.idx(pit.entryA - back - 10)]) < 0.004) back += 10;
+  pit.decide = T.wrap(pit.entryA - back);
   pit.halfW = 3.3;                              // medio ancho del carril (entrada, rápido y salida)
   // eje del carril de boxes: sale del borde derecho, corre paralelo a la recta y vuelve a él
   const sm = (f) => { f = Math.min(1, Math.max(0, f)); return f * f * (3 - 2 * f); };

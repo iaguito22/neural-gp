@@ -973,7 +973,7 @@ export class Sim {
 
     // --- telemetría para la cámara/HUD
     const kmh = car.v * 3.6;
-    const gears = [0, 95, 130, 165, 200, 240, 275, 305, 999];
+    const gears = [0, 95, 130, 165, 200, 240, 275, 310, 358];
     let g = 1; while (g < 8 && kmh > gears[g]) g++; car.gear = car.v < 0.5 ? (car.state === 'grid' ? 1 : 0) : g;
     const lo = gears[g - 1], hi = gears[g];
     car.rpm = 7000 + 5200 * Math.min(1, (kmh - lo) / Math.max(1, hi - lo));
@@ -1164,9 +1164,15 @@ export class Sim {
     if (car.pitPhase === 'in') {
       const box = T.pit.boxes[TEAMS.indexOf(car.team)];
       const toBox = T.ahead(car.s, box.s);
-      if (between(T, car.s, p.decide, p.entryA)) { const f = ramp(p.decide, p.entryA); const e = f * f * (3 - 2 * f); d = lineD * (1 - e) + p.edgeD * e; }
+      // transición suave desde donde y hacia donde iba al decidir hasta el borde, recta (antes mezclaba con car.dev, que se
+      // reescribe cada paso: se tiraba al borde en ~30 m, y seguir la trazada lo hacía temblar)
+      if (between(T, car.s, p.decide, p.entryA)) {
+        const s0 = car.pitS0 ?? p.decide, f = ramp(s0, p.entryA), e = f * f * (3 - 2 * f), m0 = Math.max(-0.3, Math.min(0.3, car.pitM0 ?? 0));
+        const tau = car.pitTau ?? 15, carry = m0 * tau * (1 - Math.exp(-T.ahead(s0, car.s) / tau)); // conserva el ángulo con que llegaba y lo pierde en ~0,6 s
+        d = ((car.pitD0 ?? lineD) + carry) * (1 - e) + p.edgeD * e;
+      }
       else d = p.laneD(car.s);
-      if (toBox < 40) d = fast + (boxD - fast) * Math.min(1, (40 - toBox) / 25);
+      if (toBox < 40) { const f = Math.min(1, (40 - toBox) / 25); d = fast + (boxD - fast) * f * f * (3 - 2 * f); }
     } else if (car.pitPhase === 'stop' || car.pitPhase === 'box') d = boxD;
     else {
       // salida
@@ -1261,6 +1267,7 @@ export class Sim {
     if (car.inPit || !car.pitReq) return;
     if (between(T, p.decide, prevS, car.s) && T.ahead(prevS, car.s) < 50) {
       car.inPit = true; car.pitPhase = 'in'; car.drs = false;
+      car.pitD0 = car.d; car.pitS0 = car.s; car.pitTau = Math.max(8, car.v * 0.6); car.pitM0 = (car.d - (car.dPrev ?? car.d)) / Math.max(0.5, T.ahead(prevS, car.s));
       this.emit({ type: 'pitin', car });
     }
   }
