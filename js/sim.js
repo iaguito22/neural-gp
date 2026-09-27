@@ -351,7 +351,18 @@ export class Sim {
   wetAt(car) {
     const W = this.wx; if (!W || W.wet < 1e-3) return 0;
     const off = Math.min(1, Math.max(0, (Math.abs(car.dev || 0) - 1.8) / 3));
-    return W.line + (W.wet - W.line) * off;
+    return Math.min(1, (W.line + (W.wet - W.line) * off) * this.puddle(car.s));
+  }
+  // charcos y ríos: en unas pocas curvas (distintas cada sesión) se acumula más agua de la que el piloto espera
+  // por lo que ve en el resto de la pista; ahí es donde se sale o hace un trompo
+  puddle(s) {
+    const T = this.T, z = T.zoneOf[T.idx(s)]; if (z < 0) return 1;
+    if (this.pudSess !== this.session) {
+      this.pudSess = this.session; let r = (this.seed || 1) * 7919 + (this.session?.id || '').length * 104729 + Math.floor(this.t);
+      const rnd = () => { r = (r * 16807) % 2147483647; return r / 2147483647; };
+      this.pud = T.zones.map(() => { const u = rnd(); return u < 0.2 ? 1.14 + 0.14 * rnd() : u < 0.45 ? 1.05 : 0.96; });
+    }
+    return this.pud[z];
   }
   // lo que el piloto cree que hay de agua (le llega con retraso; los agresivos la subestiman) y si cambia de gomas
   senseWet(car) {
@@ -1211,7 +1222,7 @@ export class Sim {
       target = 0; car.v = 0; car.pitT += DT;
       if (car.pitT >= car.stopTime) {
         // suelta segura: no salir si viene alguien por el carril rápido
-        const busy = this.cars.some((o) => o !== car && o.team !== car.team && o.inPit && live(o) && o.v > 5 && (o.pitPhase === 'in' || o.pitPhase === 'out') && T.rel(car.s, o.s) < 2 && T.rel(car.s, o.s) > -45);
+        const busy = this.cars.some((o) => o !== car && o.team !== car.team && o.inPit && live(o) && o.v > 5 && (o.pitPhase === 'in' || o.pitPhase === 'out') && T.rel(car.s, o.s) < 4 && T.rel(car.s, o.s) > -110);   // (45 m no daba: tarda ~4 s en llegar al carril y el otro llega antes)
         if (!busy) this.endStop(car);
       }
     } else if (car.pitPhase === 'out') {
@@ -1808,7 +1819,10 @@ export class Sim {
     car.zoneIn = z; car.zoneT0 = this.t; car.zoneClean = !car.inPit && car.mistake == null; car.zoneMist = false; car.zoneSlide = 0; car.zoneWide = false;
     // cuánto aprieta en esta entrada: nunca igual (los constantes varían menos); bajo presión, algo más
     const ss = this.session, press = ss.id === 'RACE' ? (car.mode === 'attack' || car.mode === 'defend' ? 0.006 : 0) : car.lapKind === 'push' && ss.id !== 'FP' ? 0.003 : 0;
-    car.exec = 1 + gauss(this.rng) * EXEC_SD * (1.3 - car.drv.cons) + press * (1.2 - car.drv.cons);
+    // en libres busca el límite (más variación), en una vuelta de clasificación arriesga, y con agua le cuesta más medir
+    const explore = ss.id === 'FP' ? 1.7 : car.lapKind === 'push' ? 1.45 : 1;
+    const wetSd = 1 + 0.5 * Math.min(1, this.wetAt(car) * 2);
+    car.exec = 1 + gauss(this.rng) * EXEC_SD * (1.3 - car.drv.cons) * Math.min(1.7, explore * wetSd) + press * (1.2 - car.drv.cons);
     car.zoneV0 = car.v;
     const c = car.candNext;
     if (c && c.z === z) {
@@ -1926,8 +1940,38 @@ export class Sim {
         } else {
           const closing = back.v - front.v;
           back.v = Math.max(0, Math.min(back.v, front.v - 0.3));
-          if (!back.inPit) { const shift = LEN + 0.05 - absRel; back.s = T.wrap(back.s - shift); back.dist -= shift; }
+          // en el pit lane también se hace cola (antes se atravesaban); el que está parado en su box no se mueve
+          const still = back.pitPhase === 'stop' || back.pitPhase === 'box';
+          // (en el pit lane poco a poco: un salto de s movía de golpe su trazado lateral en la rampa)
+          if (!back.inPit || !still) { const shift = Math.min(back.inPit ? 0.05 : 1e9, LEN + 0.05 - absRel); back.s = T.wrap(back.s - shift); back.dist -= shift; }
           if (closing > 3 && !back.inPit) this.contact(back, front, closing);
+        }
+      }
+    }
+    this.collideParked();
+  }
+
+  // coches abandonados aparcados en la escapatoria: obstáculos fijos (antes los que se salían allí los atravesaban)
+  collideParked() {
+    const T = this.T, cars = this.cars;
+    for (const P of cars) {
+      if (!P.parked || P.inPit || P.out || P.state !== 'track') continue;
+      for (const C of cars) {
+        if (C === P || !live(C) || C.inPit || C.state !== 'track') continue;
+        const rel = T.rel(P.s, C.s), lat = Math.abs(C.d - P.d);
+        if (Math.abs(rel) > LEN || lat >= 2.0) continue;
+        if (lat > 1.0 && Math.abs(rel) < LEN * 0.8) {
+          const sgn = Math.sign(C.d - P.d) || -Math.sign(P.d) || 1, push = 2.02 - lat;
+          C.d += sgn * push; C.dev += sgn * push; C.devV = 0;
+        } else {
+          // de frente contra el coche parado: se queda detrás (o delante si ya lo había pasado)
+          const sgn = rel > 0 ? 1 : -1, shift = LEN + 0.05 - Math.abs(rel);
+          C.s = T.wrap(C.s + sgn * shift); C.dist += sgn * shift;
+          if (C.v > 6 && this.t - (C.lastContact || -9) > 2) {
+            C.lastContact = this.t; this.emit({ type: 'contact', car: C, other: P, sev: C.v * 0.4 });
+            this.damage(C, 'fw', Math.min(1, C.v * 0.03));
+          }
+          C.v = Math.min(C.v, 2);
         }
       }
     }
