@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>Coche</title>
+<style>html,body{margin:0;background:#8a8f96;overflow:hidden}</style>
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js", "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/" } }</script>
+<script type="module">
+// Visor del monoplaza aislado para revisar el modelo: ?v=x,y,z&t=x,y,z (cámara y objetivo, en metros del coche)
+import * as THREE from 'three';
+import { buildCar, CAM_MOUNTS } from '../js/carModel.js';
+import { TEAMS, DRIVERS } from '../js/teams.js';
+const q = new URLSearchParams(location.search);
+const r = new THREE.WebGLRenderer({ antialias: true }); r.setSize(innerWidth, innerHeight); r.shadowMap.enabled = true; document.body.appendChild(r.domElement);
+const sc = new THREE.Scene(); sc.background = new THREE.Color(0x9fb4c8);
+sc.add(new THREE.HemisphereLight(0xdfe8f5, 0x55504a, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2); sun.position.set(4, 8, 3); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); Object.assign(sun.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5 }); sc.add(sun);
+const gr = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: 0x3a3c40, roughness: 0.9 })); gr.rotation.x = -Math.PI / 2; gr.receiveShadow = true; sc.add(gr);
+const d = DRIVERS[+(q.get('d') || 0)], car = buildCar(TEAMS.find((t) => t.id === d.team), d); sc.add(car.root);
+if (q.get('lo')) { car.hi.visible = false; car.lo.visible = true; }
+for (const w of car.wheels) if (w.front) w.steer.rotation.y = +(q.get('steer') || 0);
+const cam = new THREE.PerspectiveCamera(+(q.get('fov') || 40), innerWidth / innerHeight, 0.02, 200);
+const m = q.get('mount');
+if (m) { const M = CAM_MOUNTS[m]; cam.position.set(...M.pos); cam.lookAt(new THREE.Vector3(...M.look)); cam.fov = +(q.get('fov') || 60); cam.updateProjectionMatrix(); }
+else { cam.position.set(...(q.get('v') || '4,2,4').split(',').map(Number)); cam.lookAt(new THREE.Vector3(...(q.get('t') || '0,0.4,0').split(',').map(Number))); }
+r.render(sc, cam); document.title = 'ok';
+</script>

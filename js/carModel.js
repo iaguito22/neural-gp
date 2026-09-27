@@ -1,8 +1,6 @@
-// Monoplaza procedural: chasis por secciones (loft), pontones esculpidos con downwash y undercut,
-// cintura de botella de coca-cola, suelo con túneles venturi y difusor, alerones multi-elemento (delantero
-// y trasero con DRS móvil y beam wing), halo titanium con deflector, retrovisores aerodinámicos,
-// suspensión con trapecios perfilados, deflectores de rueda delantera, llantas de 18 pulgadas con tapacubos
-// aerodinámicos y banda de compuesto en flancos, cockpit detallado con volante, pantalla y piloto.
+// Monoplaza procedural: chasis por secciones (loft) con cintura de botella de coca-cola, pontones que nacen del chasis,
+// suelo y difusor, alerones multielemento, DRS móvil, halo, piloto, volante, retrovisores, suspensión que llega a la
+// mangueta, disco y pinza dentro de la llanta, ruedas con banda de compuesto y tapacubos.
 // Ejes locales: +z hacia delante, +y arriba, +x a la izquierda. Origen: suelo, entre ejes.
 import * as THREE from 'three';
 import * as TX from './textures.js';
@@ -121,7 +119,9 @@ function mats(team, drv) {
     carbonGloss: new THREE.MeshStandardMaterial({ color: 0x1e2024, map: carbonTex, metalness: 0.55, roughness: 0.22 }),
     black: new THREE.MeshStandardMaterial({ color: 0x0a0b0d, metalness: 0.15, roughness: 0.70 }),
     rubber: new THREE.MeshStandardMaterial({ color: 0x16171a, metalness: 0.0, roughness: 0.88 }),
-    rim: new THREE.MeshStandardMaterial({ color: 0x22252c, metalness: 0.85, roughness: 0.30 }),
+    rim: new THREE.MeshStandardMaterial({ color: 0x22252c, metalness: 0.85, roughness: 0.30, side: THREE.DoubleSide }),
+    brake: new THREE.MeshStandardMaterial({ color: 0x3b3431, metalness: 0.6, roughness: 0.5 }),
+    caliper: new THREE.MeshStandardMaterial({ color: team.c2, metalness: 0.3, roughness: 0.4 }),
     cover: new THREE.MeshStandardMaterial({ map: TX.wheelCover(team.c2), metalness: 0.50, roughness: 0.35 }),
     helmet: new THREE.MeshStandardMaterial({ map: TX.helmet(drv.helmet, team.c2), metalness: 0.35, roughness: 0.20 }),
     visor: new THREE.MeshStandardMaterial({ color: 0x0d1014, metalness: 0.95, roughness: 0.05 }),
@@ -164,17 +164,16 @@ function bodyStations() {
   ];
 }
 
-// Pontones esculpidos estilo 2026: boca con overbite, socavón pronunciado (undercut) y rampa downwash hacia el difusor
+// El borde interior se mete dentro del chasis (x = 0.12) para que el pontón nazca del cuerpo y no quede una raja entre los dos
 function sidepodStations(side) {
-  const s = side;
+  const st = (z, outer, yb, yt, n) => ({ z, w: (outer - 0.12) / 2, cx: side * (outer + 0.12) / 2, yb, yt, n });
   return [
-    { z: 0.84, w: 0.14, yb: 0.19, yt: 0.52, cx: s * 0.56, n: 4.2 },
-    { z: 0.60, w: 0.20, yb: 0.14, yt: 0.55, cx: s * 0.59, n: 4.0 },
-    { z: 0.15, w: 0.22, yb: 0.12, yt: 0.54, cx: s * 0.58, n: 3.6 },
-    { z: -0.35, w: 0.19, yb: 0.11, yt: 0.46, cx: s * 0.52, n: 3.2 },
-    { z: -0.85, w: 0.15, yb: 0.12, yt: 0.38, cx: s * 0.43, n: 3.0 },
-    { z: -1.35, w: 0.10, yb: 0.14, yt: 0.30, cx: s * 0.32, n: 3.0 },
-    { z: -1.75, w: 0.06, yb: 0.17, yt: 0.24, cx: s * 0.22, n: 3.0 },
+    st(0.78, 0.7, 0.13, 0.5, 4),
+    st(0.55, 0.8, 0.11, 0.55, 4),
+    st(0.1, 0.8, 0.11, 0.55, 3.5),
+    st(-0.5, 0.69, 0.12, 0.49, 3),
+    st(-1.1, 0.51, 0.14, 0.4, 3),
+    st(-1.6, 0.35, 0.17, 0.32, 3),
   ];
 }
 
@@ -199,25 +198,10 @@ export function buildCar(team, drv) {
   add(hi, g('podL', () => loft(sidepodStations(1), 28)), M.paint);
   add(hi, g('podR', () => loft(sidepodStations(-1), 28)), M.paint);
 
-  // Tomas de aire de los pontones (boca esculpida con bisel y fondo oscuro)
+  // bocas de los pontones
   for (const sd of [1, -1]) {
-    const inletFrame = add(hi, g('inletFrame', () => {
-      const s = new THREE.Shape();
-      s.moveTo(-0.11, -0.09); s.lineTo(0.11, -0.09); s.lineTo(0.12, 0.09); s.lineTo(-0.12, 0.09); s.closePath();
-      const h = new THREE.Path();
-      h.moveTo(-0.09, -0.07); h.lineTo(0.09, -0.07); h.lineTo(0.10, 0.07); h.lineTo(-0.10, 0.07); h.closePath();
-      s.holes.push(h);
-      const e = new THREE.ExtrudeGeometry(s, { depth: 0.04, bevelEnabled: false });
-      return e;
-    }), M.carbon);
-    inletFrame.position.set(sd * 0.56, 0.355, 0.82);
-
-    const inlet = add(hi, g('inletBack', () => new THREE.PlaneGeometry(0.19, 0.15)), M.black, false);
-    inlet.position.set(sd * 0.56, 0.355, 0.80);
-
-    // Labio superior / sobremordida aerodinámica (overbite winglet)
-    const overbite = add(hi, g('overbite', () => box(0.24, 0.014, 0.12)), M.c2);
-    overbite.position.set(sd * 0.56, 0.445, 0.82);
+    const inlet = add(hi, g('inlet', () => new THREE.CircleGeometry(0.15, 20).scale(0.75, 1.1, 1)), M.black, false);
+    inlet.position.set(sd * 0.58, 0.33, 0.79);
   }
 
   // Hueco del cockpit y borde acolchado protector
@@ -286,14 +270,6 @@ export function buildCar(team, drv) {
   for (const sd of [1, -1]) {
     const edge = add(hi, g('edge', () => box(0.025, 0.065, 2.25)), M.carbon);
     edge.position.set(sd * 0.835, 0.095, -0.25);
-    const edgeVane = add(hi, g('edgeVane', () => {
-      const s = new THREE.Shape();
-      s.moveTo(0, 0); s.lineTo(0.03, 0.05); s.lineTo(0.65, 0.05); s.lineTo(0.68, 0); s.closePath();
-      const e = new THREE.ExtrudeGeometry(s, { depth: 0.012, bevelEnabled: false });
-      e.rotateY(Math.PI / 2); return e;
-    }), M.c3);
-    edgeVane.position.set(sd * 0.845, 0.115, 0.10);
-
     // Deflectores / generadores de vórtices en la entrada del suelo
     for (let k = 0; k < 3; k++) {
       const fence = add(hi, g('fence' + k, () => box(0.008, 0.12, 0.35)), M.carbon);
@@ -302,22 +278,9 @@ export function buildCar(team, drv) {
     }
   }
 
-  // Difusor trasero con rampa ascendente pronunciada
-  const diff = add(hi, g('diff', () => {
-    const e = box(1.04, 0.022, 0.65);
-    e.rotateX(0.38); e.translate(0, 0.19, -2.26); return e;
-  }), M.carbon);
-
-  // Aletas verticales del difusor (strakes)
-  for (let i = -2; i <= 2; i++) {
-    const st = add(hi, g('strake' + i, () => {
-      const s = new THREE.Shape();
-      s.moveTo(0, 0); s.lineTo(0, 0.18); s.lineTo(0.55, 0.02); s.lineTo(0.55, 0); s.closePath();
-      const e = new THREE.ExtrudeGeometry(s, { depth: 0.010, bevelEnabled: false });
-      e.rotateY(Math.PI / 2); return e;
-    }), M.carbon);
-    st.position.set(i * 0.21, 0.10, -2.52);
-  }
+  // difusor
+  const diff = add(hi, g('diff', () => { const e = box(1.0, 0.02, 0.55); e.rotateX(0.35); e.translate(0, 0.18, -2.25); return e; }), M.carbon);
+  for (let i = -2; i <= 2; i++) { const st = add(hi, g('strake', () => { const e = box(0.012, 0.2, 0.5); e.rotateX(0.35); return e; }), M.carbon); st.position.set(i * 0.22, 0.2, -2.25); }
 
   // Tubo de escape central de titanio y estructura de impacto
   const exhaust = add(hi, g('exhaust', () => {
@@ -334,113 +297,33 @@ export function buildCar(team, drv) {
     skid.position.set(0, 0.041, zP);
   }
 
-  // --- 3. ALERÓN DELANTERO MULTI-ELEMENTO CON ENDPLATES Y DIVEPLANES
-  // (fw tiene origen en 2.62 para compatibilidad exacta con colisiones en fx.js)
+  // --- alerón delantero
   const fw = new THREE.Group(); fw.position.set(0, 0, 2.62); hi.add(fw);
-  const fwElems = [
-    { chord: 0.25, span: 1.94, y: 0.10, dz: 0.46, rotX: 0.06, mat: M.carbonGloss },
-    { chord: 0.19, span: 1.90, y: 0.15, dz: 0.34, rotX: 0.15, mat: M.carbonGloss },
-    { chord: 0.15, span: 1.88, y: 0.20, dz: 0.24, rotX: 0.27, mat: M.carbonGloss },
-    { chord: 0.12, span: 1.86, y: 0.24, dz: 0.16, rotX: 0.39, mat: M.c2 }, // flap superior con color de equipo
-  ];
-  fwElems.forEach(({ chord, span, y, dz, rotX, mat }, k) => {
-    const e = add(fw, g('fwe' + k, () => airfoil(chord, 0.08, span, -0.09)), mat);
-    e.position.set(0, y, dz); e.rotation.x = rotX;
+  const elems = [[0.24, 0.11, 0], [0.16, 0.16, -0.12], [0.13, 0.21, -0.2], [0.1, 0.26, -0.26]];
+  elems.forEach(([ch, y, dz], k) => {
+    const e = add(fw, g('fwe' + k, () => airfoil(ch, 0.1, 1.9, -0.08)), k === 3 ? M.c2 : M.carbon);
+    e.position.set(0, y, 0.45 + dz * 0.4 - k * 0.07); e.rotation.x = 0.1 + k * 0.16;
   });
-
-  // Separadores de ranura (slot gap separators)
   for (const sd of [1, -1]) {
-    for (const sx of [0.28, 0.58, 0.82]) {
-      const sep = add(fw, g('fwsep', () => box(0.008, 0.14, 0.32)), M.carbon);
-      sep.position.set(sd * sx, 0.17, 0.30); sep.rotation.x = 0.22;
-    }
+    const ep = add(fw, g('fwep', () => { const s = new THREE.Shape(); s.moveTo(0.28, 0.02); s.lineTo(-0.3, 0.02); s.lineTo(-0.3, 0.2); s.quadraticCurveTo(0.0, 0.24, 0.28, 0.1); s.closePath(); const e = new THREE.ExtrudeGeometry(s, { depth: 0.012, bevelEnabled: false }); e.rotateY(Math.PI / 2); return e; }), M.carbon);
+    ep.position.set(sd * 0.96, 0.04, 0.22);
+    const lip = add(fw, g('fwlip', () => box(0.016, 0.03, 0.56)), M.c2); lip.position.set(sd * 0.96, 0.2, 0.22);
   }
+  for (const sd of [1, -1]) { const py = add(fw, g('fwpy', () => box(0.02, 0.18, 0.25)), M.carbon); py.position.set(sd * 0.08, 0.2, 0.35); }
 
-  // Endplates aerodinámicos curvados y diveplanes exteriores
-  for (const sd of [1, -1]) {
-    const ep = add(fw, g('fwep', () => {
-      const s = new THREE.Shape();
-      s.moveTo(0.55, 0.03); s.lineTo(-0.06, 0.03); s.lineTo(-0.06, 0.22);
-      s.quadraticCurveTo(0.20, 0.26, 0.55, 0.14); s.closePath();
-      const e = new THREE.ExtrudeGeometry(s, { depth: 0.014, bevelEnabled: false });
-      e.rotateY(Math.PI / 2); return e;
-    }), M.carbon);
-    ep.position.set(sd * 0.97, 0.04, 0.0);
-
-    // Borde exterior y diveplane (canard exterior para desviar flujo fuera de la rueda)
-    const lip = add(fw, g('fwlip', () => box(0.018, 0.024, 0.60)), M.c3);
-    lip.position.set(sd * 0.97, 0.21, 0.25);
-
-    const diveplane = add(fw, g('fwdive', () => {
-      const s = new THREE.Shape();
-      s.moveTo(0, 0); s.lineTo(0.26, 0.04); s.lineTo(0.26, 0.01); s.lineTo(0, -0.02); s.closePath();
-      const e = new THREE.ExtrudeGeometry(s, { depth: 0.06, bevelEnabled: false });
-      e.rotateY(Math.PI / 2); e.rotateZ(-sd * 0.20); return e;
-    }), M.c2);
-    diveplane.position.set(sd * 0.98, 0.12, 0.26);
-  }
-
-  // Pilares de fijación morro-alerón
-  for (const sd of [1, -1]) {
-    const py = add(fw, g('fwpy', () => box(0.018, 0.16, 0.24)), M.carbon);
-    py.position.set(sd * 0.07, 0.18, 0.38); py.rotation.x = 0.12;
-  }
-
-  // --- 4. ALERÓN TRASERO CON DRS, BEAM WING, PYLON Y PILOTOS LED
-  // (rw tiene origen en -2.25 para compatibilidad con fx.js)
+  // --- alerón trasero con DRS
   const rw = new THREE.Group(); rw.position.set(0, 0, -2.25); hi.add(rw);
-
-  // Plano principal con perfil de cuchara (spoon profile)
-  const main = add(rw, g('rwm', () => airfoil(0.32, 0.11, 1.05, -0.09)), M.carbonGloss);
-  main.position.set(0, 0.79, -0.05); main.rotation.x = 0.17;
-
-  // Flap móvil de DRS (rota en flapPivot.rotation.x)
-  const flapPivot = new THREE.Group(); flapPivot.position.set(0, 0.89, -0.33); rw.add(flapPivot);
-  const flap = add(flapPivot, g('rwf', () => airfoil(0.23, 0.09, 1.03, -0.07)), M.c2);
-  flap.rotation.x = 0.55;
-
-  // Actuador central del DRS (pod central aerodinámico)
-  const drsPod = add(flapPivot, g('drspod', () => {
-    const c = new THREE.CylinderGeometry(0.024, 0.024, 0.14, 12);
-    c.rotateX(Math.PI / 2); return c;
-  }), M.carbon);
-  drsPod.position.set(0, 0.02, 0.04);
-
-  // Endplates traseros estilizados con franja de color y ranuras de desahogo
+  const main = add(rw, g('rwm', () => airfoil(0.32, 0.12, 1.02, -0.08)), M.carbon); main.position.set(0, 0.8, -0.05); main.rotation.x = 0.18;
+  const flapPivot = new THREE.Group(); flapPivot.position.set(0, 0.9, -0.33); rw.add(flapPivot);
+  const flap = add(flapPivot, g('rwf', () => airfoil(0.22, 0.1, 1.0, -0.06)), M.c2); flap.rotation.x = 0.55;
   for (const sd of [1, -1]) {
-    const ep = add(rw, g('rwep', () => {
-      const s = new THREE.Shape();
-      s.moveTo(-0.06, 0.38); s.lineTo(0.46, 0.42); s.lineTo(0.52, 1.02); s.lineTo(0.01, 1.00);
-      s.quadraticCurveTo(-0.12, 0.72, -0.06, 0.38); s.closePath();
-      const e = new THREE.ExtrudeGeometry(s, { depth: 0.016, bevelEnabled: false });
-      e.rotateY(Math.PI / 2); return e;
-    }), M.carbon);
-    ep.position.set(sd * 0.525, 0, 0);
-
-    const band = add(rw, g('rwband', () => box(0.020, 0.18, 0.52)), M.c1);
-    band.position.set(sd * 0.525, 0.90, -0.24);
-
-    const bandTrim = add(rw, g('rwbandTrim', () => box(0.022, 0.024, 0.52)), M.c3);
-    bandTrim.position.set(sd * 0.525, 0.99, -0.24);
-
-    // Tiras de luces LED de lluvia traseras en ambos endplates
-    const epLight = add(rw, g('eplight', () => box(0.012, 0.28, 0.018)), M.light, false);
-    epLight.position.set(sd * 0.525, 0.72, -0.51);
+    const ep = add(rw, g('rwep', () => { const s = new THREE.Shape(); s.moveTo(-0.05, 0.42); s.lineTo(0.45, 0.45); s.lineTo(0.5, 1.0); s.lineTo(0.02, 0.98); s.quadraticCurveTo(-0.1, 0.7, -0.05, 0.42); const e = new THREE.ExtrudeGeometry(s, { depth: 0.014, bevelEnabled: false }); e.rotateY(Math.PI / 2); return e; }), M.carbon);
+    ep.position.set(sd * 0.52, 0, 0);
+    const band = add(rw, g('rwband', () => box(0.018, 0.16, 0.5)), M.c1); band.position.set(sd * 0.52, 0.9, -0.24);
   }
-
-  // Beam wing de doble elemento (inferior y superior sobre el difusor)
-  const beamLow = add(rw, g('beamLow', () => airfoil(0.17, 0.10, 0.92, -0.06)), M.carbon);
-  beamLow.position.set(0, 0.38, -0.06); beamLow.rotation.x = 0.22;
-  const beamHigh = add(rw, g('beamHigh', () => airfoil(0.13, 0.09, 0.88, -0.06)), M.carbon);
-  beamHigh.position.set(0, 0.46, -0.16); beamHigh.rotation.x = 0.30;
-
-  // Pilar central de soporte en cuello de cisne (swan neck pylon)
-  const pylon = add(rw, g('pylon', () => box(0.026, 0.52, 0.14)), M.carbon);
-  pylon.position.set(0, 0.62, -0.19); pylon.rotation.x = -0.08;
-
-  // Luz de lluvia FIA central (emissive red)
-  const rain = add(rw, g('rain', () => box(0.14, 0.06, 0.035)), M.light, false);
-  rain.position.set(0, 0.34, -0.21);
+  const beam = add(rw, g('beam', () => airfoil(0.16, 0.12, 0.9, -0.05)), M.carbon); beam.position.set(0, 0.4, -0.05); beam.rotation.x = 0.25;
+  const pylon = add(rw, g('pylon', () => box(0.025, 0.5, 0.12)), M.carbon); pylon.position.set(0, 0.62, -0.2);
+  const rain = add(rw, g('rain', () => box(0.12, 0.05, 0.03)), M.light, false); rain.position.set(0, 0.36, -0.2);
 
   // --- 5. HALO, PILOTO, VOLANTE Y RETROVISORES
   // Halo de titanio curvado con perfil aerodinámico
@@ -452,10 +335,6 @@ export function buildCar(team, drv) {
 
   // Pilar delantero central del halo (blade pylon)
   add(hi, g('haloP', () => tube([[0, 0.92, 0.50], [0, 0.80, 0.66], [0, 0.66, 0.78]], 0.028, 14)), M.carbon);
-
-  // Micro-perfil aerodinámico superior del halo
-  const haloAero = add(hi, g('haloAero', () => box(0.48, 0.012, 0.035)), M.c2);
-  haloAero.position.set(0, 0.932, 0.22);
 
   // Piloto: casco con librea, visera con tratamiento oscuro/iridiscente y hombros
   const helmet = add(hi, g('helmet', () => new THREE.SphereGeometry(0.138, 24, 18)), M.helmet);
@@ -547,46 +426,35 @@ export function buildCar(team, drv) {
       c.rotateZ(Math.PI / 2); return c;
     }), M.rim, false);
 
-    // Conductos de freno y toma de refrigeración (estáticos con el eje de dirección)
-    const duct = add(steer, g('duct', () => {
-      const c = new THREE.CylinderGeometry(0.165, 0.165, 0.13, 20);
-      c.rotateZ(Math.PI / 2); return c;
-    }), M.carbon, false);
-    duct.position.x = -sd * (sp.w / 2 + 0.025);
-
-    const scoop = add(steer, g('scoop', () => box(0.04, 0.09, 0.06)), M.carbon, false);
-    scoop.position.set(-sd * (sp.w / 2 + 0.05), 0.04, 0.10);
-
-    // Deflector aerodinámico sobre el neumático delantero (wake control vane obligatorio F1 2022+)
-    if (sp.front) {
-      const defl = add(steer, g('frontDefl', () => {
-        const s = new THREE.Shape();
-        s.moveTo(0, 0); s.lineTo(0.32, 0.06); s.lineTo(0.32, 0.08); s.lineTo(0, 0.02); s.closePath();
-        const e = new THREE.ExtrudeGeometry(s, { depth: sp.w * 0.95, bevelEnabled: false });
-        e.translate(0, 0, -sp.w * 0.475);
-        e.rotateY(Math.PI / 2); return e;
-      }), M.carbon);
-      defl.position.set(0, sp.r + 0.015, -0.05);
-    }
-
+    // dentro de la llanta: disco, pinza y mangueta (no giran con la rueda; las delanteras sí giran con la dirección).
+    // La mangueta es a donde llegan los brazos, y el fondo tapa el hueco de la llanta (antes se veía la pista a través)
+    const back = add(steer, g('rimBack', () => new THREE.CircleGeometry(0.234, 24)), M.rim, false);
+    back.rotation.y = -sd * Math.PI / 2; back.position.x = sd * 0.02;
+    const disc = add(steer, g('disc', () => { const c = new THREE.CylinderGeometry(0.17, 0.17, 0.03, 24); c.rotateZ(Math.PI / 2); return c; }), M.brake, false);
+    disc.position.x = -sd * (sp.w / 2 - 0.06);
+    const cal = add(steer, g('caliper', () => box(0.07, 0.16, 0.08)), M.caliper, false);
+    cal.position.set(-sd * (sp.w / 2 - 0.06), 0.1, sp.front ? -0.1 : 0.1); cal.rotation.x = sp.front ? 0.6 : -0.6;
+    const up = add(steer, g('upright', () => box(0.05, 0.34, 0.1)), M.carbon);
+    up.position.x = -sd * (sp.w / 2 - 0.02);
+    // conducto de freno (tambor de carbono hacia el chasis)
+    const duct = add(steer, g('duct', () => new THREE.CylinderGeometry(0.16, 0.16, 0.12, 16)), M.carbon, false);
+    duct.rotation.z = Math.PI / 2; duct.position.x = -sd * (sp.w / 2 + 0.04);
     wheels.push({ steer, spin, tyre: side, tyreIn: sideIn, front: sp.front });
-
-    // Triángulos de suspensión de fibra de carbono (wishbones superiores e inferiores + pushrod)
-    const hub = [sd * (sp.x - 0.14), sp.r, sp.z];
-    const inY = sp.front ? 0.35 : 0.31;
-    add(hi, g(`susp${sp.z}${sd}a`, () => rod([sd * 0.20, inY + 0.13, sp.z + 0.26], [hub[0], hub[1] + 0.10, hub[2]], 0.012)), M.carbon);
-    add(hi, g(`susp${sp.z}${sd}b`, () => rod([sd * 0.20, inY + 0.13, sp.z - 0.26], [hub[0], hub[1] + 0.10, hub[2]], 0.012)), M.carbon);
-    add(hi, g(`susp${sp.z}${sd}c`, () => rod([sd * 0.18, inY - 0.11, sp.z + 0.30], [hub[0], hub[1] - 0.10, hub[2]], 0.012)), M.carbon);
-    add(hi, g(`susp${sp.z}${sd}d`, () => rod([sd * 0.18, inY - 0.11, sp.z - 0.30], [hub[0], hub[1] - 0.10, hub[2]], 0.012)), M.carbon);
-    add(hi, g(`susp${sp.z}${sd}e`, () => rod([sd * 0.20, inY + 0.06, sp.z + (sp.front ? 0.12 : -0.12)], [hub[0], hub[1], hub[2] + (sp.front ? 0.14 : -0.14)], 0.010)), M.carbon);
-    // Barra de dirección / tirante de empuje (pushrod diagonal)
-    add(hi, g(`susp${sp.z}${sd}p`, () => rod([sd * 0.19, inY + 0.14, sp.z + 0.05], [hub[0], hub[1] - 0.08, hub[2] - 0.02], 0.011)), M.carbon);
+    // triángulos de suspensión
+    const hub = [sd * (sp.x - sp.w / 2 + 0.02), sp.r, sp.z];   // la mangueta
+    const inY = sp.front ? 0.34 : 0.3;
+    add(hi, g(`susp${sp.z}${sd}a`, () => rod([sd * 0.2, inY + 0.12, sp.z + 0.25], [hub[0], hub[1] + 0.15, hub[2]])), M.carbon);
+    add(hi, g(`susp${sp.z}${sd}b`, () => rod([sd * 0.2, inY + 0.12, sp.z - 0.25], [hub[0], hub[1] + 0.15, hub[2]])), M.carbon);
+    add(hi, g(`susp${sp.z}${sd}c`, () => rod([sd * 0.18, inY - 0.12, sp.z + 0.3], [hub[0], hub[1] - 0.15, hub[2]])), M.carbon);
+    add(hi, g(`susp${sp.z}${sd}d`, () => rod([sd * 0.18, inY - 0.12, sp.z - 0.3], [hub[0], hub[1] - 0.15, hub[2]])), M.carbon);
+    add(hi, g(`susp${sp.z}${sd}e`, () => rod([sd * 0.2, inY + 0.05, sp.z + (sp.front ? 0.1 : -0.1)], [hub[0], hub[1], hub[2] + (sp.front ? 0.12 : -0.12)], 0.01)), M.carbon);
   }
+
 
   // --- 7. VERSIÓN LEJANA (LOD ULTRA-LIGERO)
   add(lo, g('bodyLo', () => loft(bodyStations().filter((_, i) => i % 2 === 0), 14)), M.paint);
-  add(lo, g('podLLo', () => loft(sidepodStations(1).filter((_, i) => i % 2 === 0 || i === 6), 12)), M.paint);
-  add(lo, g('podRLo', () => loft(sidepodStations(-1).filter((_, i) => i % 2 === 0 || i === 6), 12)), M.paint);
+  add(lo, g('podLLo', () => loft(sidepodStations(1).filter((_, i) => i % 2 === 0 || i === 5), 12)), M.paint);
+  add(lo, g('podRLo', () => loft(sidepodStations(-1).filter((_, i) => i % 2 === 0 || i === 5), 12)), M.paint);
   const fwLo = add(lo, g('fwLo', () => box(1.92, 0.05, 0.45)), M.carbon); fwLo.position.set(0, 0.16, 2.85);
   const rwLo = add(lo, g('rwLo', () => box(1.05, 0.28, 0.40)), M.carbon); rwLo.position.set(0, 0.88, -2.45);
   const flLo = add(lo, g('flLo', () => box(1.64, 0.03, 3.35)), M.carbon); flLo.position.set(0, 0.08, -0.40);
