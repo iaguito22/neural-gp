@@ -220,6 +220,42 @@ body.mgr #feed, body.mgr #tele { display: none; }
 #replayBar button { border: 0; border-radius: 6px; padding: 6px 10px; font: 700 12px 'Titillium Web', sans-serif; background: rgba(255,255,255,0.1); color: #fff; cursor: pointer; }
 #replayBar button:hover { background: rgba(255,255,255,0.2); }
 body.replay #sessionBar, body.replay #radio, body.replay #battle, body.replay #qlive { visibility: hidden; }
+/* pantalla de inicio */
+.sheet.startSheet { width: min(1120px, 100%); background: rgba(14,14,20,0.94); border-radius: 22px; }
+.start { display: grid; grid-template-columns: 1.35fr 1fr; gap: 28px; padding: 28px 30px 26px; }
+.start h3 { margin: 18px 0 8px; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.start .logo { font-size: 44px; font-weight: 900; font-style: italic; letter-spacing: -0.01em; line-height: 1; }
+.start .logo i { color: var(--red); }
+.start .tag { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 10px 0 0; max-width: 52ch; }
+.tcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.tcard { display: grid; grid-template-columns: 110px 1fr; grid-template-rows: auto auto 1fr; column-gap: 12px; text-align: left; background: rgba(255,255,255,0.04); border: 1px solid transparent; border-radius: 14px; padding: 10px 12px; color: #fff; cursor: pointer; font: inherit; transition: background .15s, border-color .15s; }
+.tcard:hover { background: rgba(255,255,255,0.08); }
+.tcard.on { border-color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
+.tcard svg { grid-row: 1 / 4; width: 110px; height: 70px; align-self: center; }
+.tcard svg path { fill: none; stroke: #d9d9df; stroke-width: 3.2; stroke-linejoin: round; }
+.tcard.on svg path { stroke: #fff; }
+.tcard svg circle { fill: var(--red); }
+.tcard b { font-size: 16px; font-weight: 900; margin-top: 4px; }
+.tcard span { font-size: 12px; color: var(--muted); }
+.tcard em { font-style: normal; font-size: 12px; color: #d9d9df; font-weight: 700; margin-top: 6px; }
+.start .seg { display: flex; background: rgba(255,255,255,0.06); border-radius: 999px; padding: 3px; }
+.start .seg button { flex: 1; border: 0; background: transparent; color: var(--muted); font: 700 13px 'Titillium Web', sans-serif; padding: 8px 6px; border-radius: 999px; cursor: pointer; }
+.start .seg button.on { background: #fff; color: #111; }
+.start .teams { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; transition: opacity .2s; }
+.start .teams.off { display: none; }
+.start .teams button { display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,0.05); border: 1px solid transparent; border-radius: 10px; padding: 6px 7px; color: #d9d9df; font: 700 10px 'Titillium Web', sans-serif; letter-spacing: 0.04em; cursor: pointer; }
+.start .teams button i { width: 8px; height: 16px; border-radius: 2px; }
+.start .teams button span { margin-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.start .teams button.on { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
+.start .hint { color: var(--muted); font-size: 12px; margin: 8px 2px 0; min-height: 2.6em; }
+.start .go { width: 100%; margin-top: 22px; padding: 14px; font-size: 16px; border-radius: 999px; }
+.start .keys { color: var(--muted); font-size: 11px; margin: 12px 0 0; text-align: center; line-height: 1.6; }
+.start .keys b { color: #d9d9df; }
+.start .sched { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.start .sched div { background: rgba(255,255,255,0.04); border-radius: 14px; padding: 10px 12px; }
+.start .sched b { display: block; font-size: 14px; font-weight: 900; }
+.start .sched span { font-size: 12px; color: var(--muted); }
+@media (max-width: 900px) { .start { grid-template-columns: 1fr; } .tcards { grid-template-columns: 1fr; } }
 #feed { position: absolute; right: 16px; top: 204px; width: 300px; display: flex; flex-direction: column; gap: 6px; }
 .note { background: var(--panel); border-radius: 8px; padding: 7px 12px; font-size: 14px; font-weight: 600; display: flex; gap: 10px; align-items: center; animation: slide 0.35s ease-out; border-left: 5px solid #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
 .note b { font-weight: 900; }

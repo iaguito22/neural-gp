@@ -204,27 +204,57 @@ async function main() {
 
   // --- pantalla de inicio
   document.getElementById('loading').remove();
-  const sel = 'font:inherit;background:#1d1d27;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 8px';
-  const intro = ui.modal(`<header><span class="kicker">FIN DE SEMANA</span><h2>Neural Grand Prix · ${T.meta.name}</h2></header>
-    <div class="body">
-      <p class="lead">Veintidós pilotos con IA que aprenden a base de dar vueltas: en libres buscan la trazada y el límite de cada curva, en clasificación lo exprimen en una vuelta y en carrera pelean, gestionan neumáticos y paran en boxes. Cada fin de semana empiezan de cero.</p>
-      <p class="lead">Cámaras: <b>AUTO</b> realiza la retransmisión sola; o elige piloto en la torre y un plano (teclas 1–8). Espacio pausa, + / − cambia la velocidad, L abre el panel de aprendizaje.</p>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:8px">
-        <label class="lead" style="margin:0" for="iTrack">Circuito</label>
-        <select id="iTrack" style="${sel}">${Object.values(CIRCUITS).map((c) => `<option value="${c.id}" ${c.id === trackId ? 'selected' : ''}>${c.name} · ${c.place}</option>`).join('')}</select>
-        <label class="lead" style="margin:0" for="iLaps">Vueltas de carrera</label>
-        <select id="iLaps" style="font:inherit;background:#1d1d27;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 8px">${[10, 15, 20, 30].map((l) => `<option ${l === sim.raceLaps ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <label class="lead" style="margin:0" for="iWx">Tiempo</label>
-        <select id="iWx" style="${sel}">${[['random', 'Aleatorio'], ['dry', 'Seco'], ['mixed', 'Variable (chubascos)'], ['wet', 'Lluvia']].map(([v, l]) => `<option value="${v}" ${v === sim.weatherMode ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <label class="lead" style="margin:0" for="iMode">Modo</label>
-        <select id="iMode" style="${sel}"><option value="watch" ${settings.mode !== 'mgr' ? 'selected' : ''}>Espectador</option><option value="mgr" ${settings.mode === 'mgr' ? 'selected' : ''}>Mánager</option></select>
-        <select id="iTeam" style="${sel};${settings.mode === 'mgr' ? '' : 'display:none'}">${TEAMS.map((t) => `<option value="${t.id}" ${t.id === settings.team ? 'selected' : ''}>${t.name}</option>`).join('')}</select>
-        <label class="lead" style="margin:0" for="iQ">Calidad</label>
-        <select id="iQ" style="font:inherit;background:#1d1d27;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 8px"><option value="high" ${quality === 'high' ? 'selected' : ''}>Alta</option><option value="low" ${quality === 'low' ? 'selected' : ''}>Baja (portátil)</option></select>
-        <span class="spacer" style="flex:1"></span>
-        <button class="btn" id="iGo">Empezar entrenamientos</button>
+  // circuitos: dibujo del trazado de cada uno (del eje real), longitud y curvas
+  const trackCard = (c) => {
+    const TT = c.id === trackId ? T : buildTrack(c.id);
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+    for (let i = 0; i < TT.N; i += 10) { x0 = Math.min(x0, TT.x[i]); x1 = Math.max(x1, TT.x[i]); z0 = Math.min(z0, TT.z[i]); z1 = Math.max(z1, TT.z[i]); }
+    const W = 150, H = 96, k = Math.min((W - 12) / (x1 - x0), (H - 12) / (z1 - z0)), ox = (W - (x1 - x0) * k) / 2, oz = (H - (z1 - z0) * k) / 2;
+    let d = ''; for (let i = 0; i < TT.N; i += 12) d += `${i ? 'L' : 'M'}${(ox + (TT.x[i] - x0) * k).toFixed(1)},${(oz + (TT.z[i] - z0) * k).toFixed(1)}`;
+    const sx = ox + (TT.x[0] - x0) * k, sz = oz + (TT.z[0] - z0) * k;
+    return `<button class="tcard ${c.id === trackId ? 'on' : ''}" data-track="${c.id}"><svg viewBox="0 0 ${W} ${H}"><path d="${d}Z"/><circle cx="${sx.toFixed(1)}" cy="${sz.toFixed(1)}" r="3.2"/></svg>
+      <b>${c.name}</b><span>${c.place}</span><em>${(TT.L / 1000).toFixed(2)} km · ${TT.corners.length} curvas</em></button>`;
+  };
+  const seg = (id, opts, cur) => `<div class="seg" data-for="${id}">${opts.map(([v, l]) => `<button data-v="${v}" class="${String(v) === String(cur) ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const hidden = (id, opts, cur) => `<select id="${id}" hidden>${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(cur) ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  const O = {
+    iLaps: [10, 15, 20, 30].map((l) => [l, l]),
+    iWx: [['random', 'Aleatorio'], ['dry', 'Seco'], ['mixed', 'Chubascos'], ['wet', 'Lluvia']],
+    iMode: [['watch', 'Espectador'], ['mgr', 'Mánager']],
+    iQ: [['high', 'Alta'], ['low', 'Baja']],
+  };
+  const curMode = settings.mode === 'mgr' ? 'mgr' : 'watch', curTeam = TEAMS.some((t) => t.id === settings.team) ? settings.team : TEAMS[0].id;
+  const intro = ui.modal(`<div class="start">
+      <div class="st-l">
+        <div class="logo">NEURAL <i>GP</i></div>
+        <p class="tag">Veintidós pilotos con IA que aprenden dando vueltas. Buscan la trazada en libres, la exprimen en clasificación y pelean en carrera. Cada fin de semana empiezan de cero.</p>
+        <h3>Circuito</h3>
+        <div class="tcards">${Object.values(CIRCUITS).map(trackCard).join('')}</div>
+        <h3>El fin de semana</h3>
+        <div class="sched"><div><b>Libres</b><span>30 min · buscan trazada y límite</span></div><div><b>Clasificación</b><span>Q1 12′ · Q2 10′ · Q3 9′</span></div><div><b>Carrera</b><span id="schedLaps">${sim.raceLaps} vueltas · paradas y peleas</span></div></div>
       </div>
+      <div class="st-r">
+        <h3>Modo</h3>${seg('iMode', O.iMode, curMode)}
+        <div class="teams ${curMode === 'mgr' ? '' : 'off'}">${TEAMS.map((t) => `<button data-team="${t.id}" class="${t.id === curTeam ? 'on' : ''}" title="${t.name}"><i style="background:${t.c1}"></i><i style="background:${t.c2}"></i><span>${t.short}</span></button>`).join('')}</div>
+        <p class="hint">${curMode === 'mgr' ? 'Llevas a los dos pilotos desde el muro: ritmo, paradas, neumáticos y alerón.' : 'La retransmisión se realiza sola; puedes elegir piloto y plano cuando quieras.'}</p>
+        <h3>Tiempo</h3>${seg('iWx', O.iWx, sim.weatherMode)}
+        <h3>Vueltas de carrera</h3>${seg('iLaps', O.iLaps, sim.raceLaps)}
+        <h3>Calidad gráfica</h3>${seg('iQ', O.iQ, quality)}
+        <button class="btn go" id="iGo">Empezar el fin de semana</button>
+        <p class="keys"><b>A</b> auto · <b>1–8</b> planos · <b>Espacio</b> pausa · <b>+/−</b> velocidad · <b>R</b> repetición · <b>L</b> aprendizaje · <b>Esc</b> menú</p>
+      </div>
+      ${hidden('iTrack', Object.values(CIRCUITS).map((c) => [c.id, c.name]), trackId)}${hidden('iLaps', O.iLaps, sim.raceLaps)}${hidden('iWx', O.iWx, sim.weatherMode)}${hidden('iMode', O.iMode, curMode)}${hidden('iQ', O.iQ, quality)}${hidden('iTeam', TEAMS.map((t) => [t.id, t.name]), curTeam)}
     </div>`);
+  intro.querySelector('.sheet').classList.add('startSheet');
+  // los controles visibles mueven los <select> ocultos (que son los que se leen al empezar)
+  intro.querySelectorAll('.seg').forEach((g) => g.addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    g.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    const s = intro.querySelector('#' + g.dataset.for); s.value = b.dataset.v; s.dispatchEvent(new Event('change'));
+    if (g.dataset.for === 'iLaps') intro.querySelector('#schedLaps').textContent = `${b.dataset.v} vueltas · paradas y peleas`;
+  }));
+  intro.querySelectorAll('[data-team]').forEach((b) => (b.onclick = () => { intro.querySelectorAll('[data-team]').forEach((x) => x.classList.toggle('on', x === b)); intro.querySelector('#iTeam').value = b.dataset.team; }));
+  intro.querySelectorAll('[data-track]').forEach((b) => (b.onclick = () => { if (b.dataset.track === trackId) return; const s = intro.querySelector('#iTrack'); s.value = b.dataset.track; s.dispatchEvent(new Event('change')); }));
   intro.querySelector('#iGo').onclick = () => {
     sim.raceLaps = +intro.querySelector('#iLaps').value;
     const q = intro.querySelector('#iQ').value, tk = intro.querySelector('#iTrack').value;
@@ -237,7 +267,11 @@ async function main() {
     ui.closeModal(); app.audio.start(); ui.syncButtons(); startSession(params.get('start') || 'FP');
   };
   // al cambiar de circuito se carga ya (la pantalla de inicio vuelve a salir con el circuito nuevo)
-  intro.querySelector('#iMode').onchange = (e) => { intro.querySelector('#iTeam').style.display = e.target.value === 'mgr' ? '' : 'none'; };
+  intro.querySelector('#iMode').onchange = (e) => {
+    const m = e.target.value === 'mgr';
+    intro.querySelector('.teams').classList.toggle('off', !m);
+    intro.querySelector('.hint').textContent = m ? 'Llevas a los dos pilotos desde el muro: ritmo, paradas, neumáticos y alerón.' : 'La retransmisión se realiza sola; puedes elegir piloto y plano cuando quieras.';
+  };
   intro.querySelector('#iTrack').onchange = (e) => { writeJSON(SETTINGS, { ...settings, quality: intro.querySelector('#iQ').value, track: e.target.value, raceLaps: +intro.querySelector('#iLaps').value }); location.href = location.pathname; };
   if (params.get('autostart')) { ui.closeModal(); startSession(params.get('autostart')); }
   requestAnimationFrame(loop);
