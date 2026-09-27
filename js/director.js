@@ -261,7 +261,6 @@ export class Director {
     const f = this.focus, now = sim.t;
     // acaba de cerrar la vuelta: se queda a ver el tiempo
     if (f && f.lap !== this.qLap) { const was = this.qLap; this.qLap = f.lap; if (was != null && this.story?.kind !== 'filler' && this.story?.car === f) this.qHold = now + 4; }
-    if (this.qHold && now < this.qHold) { this.shotCycleS(null); return true; }
     let top = null;
     const stories = [];
     for (const car of sim.cars) {
@@ -273,6 +272,19 @@ export class Director {
       if (!top || st.v > top.v) top = st;
     }
     if (!top) return true;
+    // viendo el tiempo del que acaba de cruzar: se aguanta, salvo que otra vuelta que cambia la clasificación (top 3 o
+    // salvarse del corte) esté a punto de llegar a meta; entonces, tras 1,5 s, a por ella (antes se la perdía entera)
+    if (this.qHold && now < this.qHold) {
+      const hot = stories.find((x) => x.car !== f && x.kind === 'finish' && x.good && x.toLine < 260 && x.p != null &&
+        (x.p <= 3 || (cut && x.p <= cut && ctx.posNow(x.car) > cut)));
+      if (!hot || now < this.qHold - 2.5) { this.shotCycleS(null); return true; }
+      this.qHold = 0; top = hot;
+      this.story = { kind: hot.kind, car: hot.car, t0: now };
+      this.focus = hot.car; this.storyT = now; this.qLap = hot.car.lap; this.lineShot = hot.car.lap; this.shotN = 0;
+      this.seen[hot.car.i] = now; this.reason = 'lap';
+      this.cutTo('track', 12, true);
+      return true;
+    }
     const cur = f ? stories.find((x) => x.car === f) : null;
     const curV = cur ? cur.v : -1;
     // tiempo siguiendo a este coche (no desde el último plano: los planos cambian cada pocos segundos)
