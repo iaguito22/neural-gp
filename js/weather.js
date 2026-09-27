@@ -42,7 +42,7 @@ export function buildWeather(scene, world, scenery, renderer, camera, quality) {
   // ---------------------------------------------------------------- espuma de agua (spray) detrás de los coches
   const M = hi ? 7000 : 3000;
   const sp = new Float32Array(M * 3), sSize = new Float32Array(M), sAlpha = new Float32Array(M);
-  const pv = new Float32Array(M * 3), pLife = new Float32Array(M), pMax = new Float32Array(M), pS0 = new Float32Array(M);
+  const pv = new Float32Array(M * 3), pLife = new Float32Array(M), pMax = new Float32Array(M), pS0 = new Float32Array(M), pA0 = new Float32Array(M);
   let live = 0;
   const sg = new THREE.BufferGeometry();
   sg.setAttribute('position', new THREE.BufferAttribute(sp, 3).setUsage(THREE.DynamicDrawUsage));
@@ -53,7 +53,7 @@ export function buildWeather(scene, world, scenery, renderer, camera, quality) {
     uniforms: su, transparent: true, depthWrite: false, fog: true,
     vertexShader: `uniform float uScale; attribute float aSize, aAlpha; varying float vA;
       #include <fog_pars_vertex>
-      void main() { vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); vA = aAlpha; gl_PointSize = min(420.0, aSize * uScale / max(0.5, -mvPosition.z)); gl_Position = projectionMatrix * mvPosition;
+      void main() { vec4 mvPosition = modelViewMatrix * vec4(position, 1.0); vA = aAlpha * smoothstep(1.5, 7.0, -mvPosition.z); gl_PointSize = min(420.0, aSize * uScale / max(0.5, -mvPosition.z)); gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
       }`,
     fragmentShader: `uniform vec3 uCol; varying float vA;
@@ -62,12 +62,13 @@ export function buildWeather(scene, world, scenery, renderer, camera, quality) {
         #include <fog_fragment>
       }`,
   }));
+  // (las que pasan pegadas a la cámara se desvanecen: enormes en pantalla, eran un velo blanco en el dron)
   spray.frustumCulled = false; spray.renderOrder = 4; scene.add(spray);
-  const emit = (x, y, z, vx, vy, vz, life, s0) => {
+  const emit = (x, y, z, vx, vy, vz, life, s0, a0 = 1) => {
     if (live >= M) return;
     const k = live++;
     sp[k * 3] = x; sp[k * 3 + 1] = y; sp[k * 3 + 2] = z; pv[k * 3] = vx; pv[k * 3 + 1] = vy; pv[k * 3 + 2] = vz;
-    pLife[k] = 0; pMax[k] = life; pS0[k] = s0;
+    pLife[k] = 0; pMax[k] = life; pS0[k] = s0; pA0[k] = a0;
   };
 
   // ---------------------------------------------------------------- gotas en la lente (on-board)
@@ -138,16 +139,18 @@ export function buildWeather(scene, world, scenery, renderer, camera, quality) {
         const R = V.root.position; const dc = R.distanceTo(cam); if (dc > 320) continue;
         fwd.set(0, 0, 1).applyQuaternion(V.root.quaternion);
         // cuanto más agua, más agresivo: más gotas, más grandes, más altas y que duran más (con charcos, una cortina)
-        const n = sw * (1 + 2.2 * sw * sw) * Math.min(1, car.v / 70) * (hi ? 130 : 70) * dt * (dc > 150 ? 0.5 : 1);
+        // y sobre todo cuanto más rápido: despacio apenas levanta agua; a 300 km/h, cortina (antes a 110 ya tapaba el coche)
+        const q = Math.min(1, Math.max(0, (car.v - 18) / 62)), qs = q * q;
+        const n = sw * (1 + 1.2 * sw * sw) * qs * (hi ? 80 : 45) * dt * (dc > 150 ? 0.5 : 1);
         let cnt = Math.floor(n) + (Math.random() < n % 1 ? 1 : 0);
         while (cnt-- > 0) {
           const side = Math.random() < 0.5 ? -1 : 1, back = 2.1 + Math.random() * 0.8;
           const x = R.x - fwd.x * back + fwd.z * side * 0.75, z = R.z - fwd.z * back - fwd.x * side * 0.75;
           const f = car.v * (0.12 + Math.random() * 0.2), tail = Math.random() < 0.35;   // cola alta del difusor
-          const up = 1 + 0.9 * sw * sw, big = 1 + 0.7 * sw * sw, spread = 3 * (1 + 0.8 * sw);
+          const up = (0.45 + 0.55 * q) * (1 + 0.9 * sw * sw), big = (0.5 + 0.5 * q) * (1 + 0.6 * sw * sw), spread = 3 * (1 + 0.8 * sw) * (0.5 + 0.5 * q);
           emit(tail ? R.x - fwd.x * 2.4 : x, R.y + (tail ? 0.6 : 0.25) + Math.random() * 0.3, tail ? R.z - fwd.z * 2.4 : z,
             fwd.x * f + (Math.random() - 0.5) * spread, ((tail ? 3 : 1.2) + Math.random() * 2.8) * up, fwd.z * f + (Math.random() - 0.5) * spread,
-            (0.9 + Math.random() * 1.1) * (1 + 0.6 * sw * sw), (tail ? 1.4 : 0.9 + Math.random() * 0.8) * big);
+            (0.6 + Math.random() * 0.9) * (0.6 + 0.4 * q) * (1 + 0.5 * sw * sw), (tail ? 1.4 : 0.9 + Math.random() * 0.8) * big, 0.45 + 0.55 * q);
         }
       }
     }
@@ -158,13 +161,13 @@ export function buildWeather(scene, world, scenery, renderer, camera, quality) {
         const l = --live;
         sp[k * 3] = sp[l * 3]; sp[k * 3 + 1] = sp[l * 3 + 1]; sp[k * 3 + 2] = sp[l * 3 + 2];
         pv[k * 3] = pv[l * 3]; pv[k * 3 + 1] = pv[l * 3 + 1]; pv[k * 3 + 2] = pv[l * 3 + 2];
-        pLife[k] = pLife[l]; pMax[k] = pMax[l]; pS0[k] = pS0[l]; k--; continue;
+        pLife[k] = pLife[l]; pMax[k] = pMax[l]; pS0[k] = pS0[l]; pA0[k] = pA0[l]; k--; continue;
       }
       const drag = Math.exp(-dt * 2.2);
       pv[k * 3] *= drag; pv[k * 3 + 2] *= drag; pv[k * 3 + 1] = pv[k * 3 + 1] * drag - 1.5 * dt;
       sp[k * 3] += pv[k * 3] * dt; sp[k * 3 + 1] += pv[k * 3 + 1] * dt; sp[k * 3 + 2] += pv[k * 3 + 2] * dt;
       const a = pLife[k] / pMax[k];
-      sSize[k] = pS0[k] * (1 + a * 4.5); sAlpha[k] = (night ? 0.28 : 0.42) * sw * (0.75 + 0.55 * sw) * (1 - a) * Math.min(1, a * 8);
+      sSize[k] = pS0[k] * (1 + a * 3.2); sAlpha[k] = pA0[k] * (night ? 0.2 : 0.26) * sw * (0.75 + 0.55 * sw) * (1 - a) * Math.min(1, a * 8);
     }
     sg.setDrawRange(0, live);
     if (live) { sg.attributes.position.needsUpdate = true; sg.attributes.aSize.needsUpdate = true; sg.attributes.aAlpha.needsUpdate = true; }

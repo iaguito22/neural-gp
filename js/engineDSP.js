@@ -9,6 +9,8 @@ export function makeV6(sr, seed = 1) {
   // resonador de 2 polos (paso banda) con frecuencia y Q
   const res = (f, q) => ({ f, q, y1: 0, y2: 0 });
   const R = [res(360, 1.9), res(860, 1.8), res(1900, 1.4), res(150, 1.4), res(80, 1.6)];
+  // medio orden (media frecuencia de encendido): el «bramido» grave del escape de un V6, que sigue a las vueltas
+  const half = res(200, 2.2);
   const comb = new Float32Array(Math.round(sr * 0.01)); let cw = 0;
   let combLp = 0;
   let phase = 0, env = 0, nEnv = 0, lp = 0, last = 0, dc = 0, next = 0;
@@ -20,13 +22,14 @@ export function makeV6(sr, seed = 1) {
     const bright = 0.18 + 0.15 * load;                  // brillo controlado con gas para evitar silbido de sintetizador
     // Ganancias de formantes: con gas dominan los subgraves y cuerpo (80 y 150 Hz)
     const RG = [
-      0.90 + 0.12 * load,                               // 360 Hz: garganta de escape / rugido medio
-      0.55 - 0.20 * load,                               // 860 Hz: mordida mecánica
+      0.80 - 0.10 * load,                               // 360 Hz: garganta de escape / rugido medio
+      0.45 - 0.25 * load,                               // 860 Hz: mordida mecánica
       0.22 - 0.12 * load,                               // 1900 Hz: timbre metálico suave
       0.60 + 0.45 * load,                               // 150 Hz: pegada de cigüeñal y escape
       0.90 + 0.55 * load                                // 80 Hz: subgrave y masa del bloque
     ];
-    for (const r of R) {
+    half.f = Math.min(900, fire * 0.5); half.q = 2.2;
+    for (const r of [...R, half]) {
       const w = 2 * Math.PI * r.f / sr;
       r.a1 = -2 * Math.exp(-w / (2 * r.q)) * Math.cos(w);
       r.a2 = Math.exp(-w / r.q);
@@ -42,7 +45,10 @@ export function makeV6(sr, seed = 1) {
         next = k;
         // explosión: fuerza según gas; en corte de encendido no hay
         const onLoad = 0.28 + 0.72 * load;
-        let a = cyl[k] * onLoad * (0.90 + 0.20 * rnd()) * (1 - cut);
+        // las dos bancadas no suenan igual (escapes de distinta longitud): esa alternancia es la que da energía a media
+        // frecuencia de encendido, el tono grave que se oye por debajo del aullido
+        const bank = k % 2 ? 1 - 0.32 * load : 1 + 0.32 * load;
+        let a = cyl[k] * bank * onLoad * (0.90 + 0.20 * rnd()) * (1 - cut);
         // sin gas y con vueltas: petardeo en el escape
         if (load < 0.15 && rpm > 8000 && rnd() < 0.05) a = 1.3 + rnd() * 0.6;
         env += a;
@@ -58,6 +64,7 @@ export function makeV6(sr, seed = 1) {
         const Z = R[r], v = Z.b * lp - Z.a1 * Z.y1 - Z.a2 * Z.y2;
         Z.y2 = Z.y1; Z.y1 = v; y += v * RG[r];
       }
+      { const v = half.b * lp - half.a1 * half.y1 - half.a2 * half.y2; half.y2 = half.y1; half.y1 = v; y += v * 1.3 * load; }   // (sin gas, nada: la retención gustaba como estaba)
       // Tubo de escape con amortiguación de agudos en la realimentación
       const dly = Math.min(comb.length - 2, sr * (0.0016 + 0.0022 * (1 - (rpm - 4000) / 9000)));
       const rp = cw - dly, i0 = Math.floor(rp), fr = rp - i0, L = comb.length;

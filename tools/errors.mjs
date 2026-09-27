@@ -2,13 +2,14 @@
 // Y solapes entre coches en carrera (dos coches uno dentro del otro): node tools/errors.mjs [track] [seeds] [FP,Q1,…]
 import { buildTrack } from '../js/track.js';
 import { Sim } from '../js/sim.js';
+import { COMPOUNDS } from '../js/teams.js';
 const T = buildTrack(process.argv[2] || 'gp'), seeds = +(process.argv[3] || 2);
 for (const wx of ['dry', 'mixed']) {
   const agg = {};
   for (let seed = 1; seed <= seeds; seed++) {
     const sim = new Sim(T, { seed, raceLaps: 15 }); sim.weatherMode = wx;
     let cur = null;
-    sim.on((e) => { if (!cur) return; const k = e.type === 'mistake' ? e.kind : e.type; if (['mistake', 'lockup', 'retire', 'contact', 'limits'].includes(e.type)) cur[k] = (cur[k] || 0) + 1; if (e.type === 'lap') cur.laps++; });
+    sim.on((e) => { if (!cur) return; const k = e.type === 'mistake' ? e.kind : e.type; if (['mistake', 'lockup', 'retire', 'contact', 'limits'].includes(e.type)) cur[k] = (cur[k] || 0) + 1; if (e.type === 'lap') cur.laps++; if (e.type === 'mistake' && e.kind === 'spin' && !COMPOUNDS[e.car.tyre.c].wet && sim.wetAt(e.car) > 0.08) cur.slickWet = (cur.slickWet || 0) + 1; });
     for (const id of (process.argv[4] || 'FP,Q1,Q2,Q3,RACE').split(',')) {
       const a = agg[id] || (agg[id] = { laps: 0, rain: 0, n: 0, over: 0, overMax: 0 }); cur = a;
       sim.startSession(id);
@@ -25,6 +26,6 @@ for (const wx of ['dry', 'mixed']) {
   console.log(`\n== ${wx}`);
   for (const [id, a] of Object.entries(agg)) {
     const per = (k) => ((a[k] || 0) / a.laps * 100).toFixed(1);
-    console.log(`${id.padEnd(5)} vueltas ${String(a.laps).padStart(4)} lluvia ${(a.rain / a.n).toFixed(2)} | por 100 v: trompo ${per('spin')} salida ${per('off')} bloqueo ${per('lockup')} límites ${per('limits')} contacto ${per('contact')} abandono ${per('retire')}${id === 'RACE' ? ` | solapes ${a.over} (máx ${a.overMax.toFixed(2)} m)` : ''}`);
+    console.log(`${id.padEnd(5)} vueltas ${String(a.laps).padStart(4)} lluvia ${(a.rain / a.n).toFixed(2)} | por 100 v: trompo ${per('spin')} salida ${per('off')} bloqueo ${per('lockup')} límites ${per('limits')} contacto ${per('contact')} abandono ${per('retire')} | trompos con lisos en mojado ${a.slickWet || 0}${id === 'RACE' ? ` | solapes ${a.over} (máx ${a.overMax.toFixed(2)} m)` : ''}`);
   }
 }

@@ -66,12 +66,54 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
 
   // ---------- materiales
   const mat = {
-    asphalt: new THREE.MeshStandardMaterial({ map: TX.asphalt(), roughness: 0.96, metalness: 0.0, color: 0xd6d6d6, envMapIntensity: 0.35 }),
-    rubber: new THREE.MeshStandardMaterial({ map: TX.rubber(), transparent: true, depthWrite: false, roughness: 0.75, polygonOffset: true, polygonOffsetFactor: -2 }),
-    white: new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -3 }),
-    kerb: new THREE.MeshStandardMaterial({ map: TX.kerb(), roughness: 0.55 }),
-    kerbY: new THREE.MeshStandardMaterial({ map: TX.kerb('#FFD200', '#1b1b1b'), roughness: 0.55 }),
-    verge: new THREE.MeshStandardMaterial({ map: TX.asphalt(), color: 0xb9bcc2, roughness: 0.95 }),
+    asphalt: new THREE.MeshStandardMaterial({
+      map: TX.asphalt(),
+      normalMap: TX.asphaltNormal(),
+      normalScale: new THREE.Vector2(0.4, 0.4),
+      roughnessMap: TX.asphaltRough(),
+      roughness: 0.90,
+      metalness: 0.0,
+      color: 0xd4d4d8,
+      envMapIntensity: 0.35,
+    }),
+    rubber: new THREE.MeshStandardMaterial({
+      map: TX.rubber(),
+      transparent: true,
+      depthWrite: false,
+      roughness: 0.82,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    }),
+    white: new THREE.MeshStandardMaterial({
+      color: 0xf2f2f2,
+      roughness: 0.65,
+      normalMap: TX.asphaltNormal(),
+      normalScale: new THREE.Vector2(0.18, 0.18),
+      polygonOffset: true,
+      polygonOffsetFactor: -3,
+      polygonOffsetUnits: -3,
+    }),
+    kerb: new THREE.MeshStandardMaterial({
+      map: TX.kerb(),
+      roughness: 0.58,
+      normalMap: TX.asphaltNormal(),
+      normalScale: new THREE.Vector2(0.25, 0.25),
+    }),
+    kerbY: new THREE.MeshStandardMaterial({
+      map: TX.kerb('#FFD200', '#1b1b1b'),
+      roughness: 0.58,
+      normalMap: TX.asphaltNormal(),
+      normalScale: new THREE.Vector2(0.25, 0.25),
+    }),
+    verge: new THREE.MeshStandardMaterial({
+      map: TX.asphalt(),
+      normalMap: TX.asphaltNormal(),
+      normalScale: new THREE.Vector2(0.4, 0.4),
+      roughnessMap: TX.asphaltRough(),
+      color: 0xb9bcc2,
+      roughness: 0.92,
+    }),
     grass: new THREE.MeshStandardMaterial({ map: night ? TX.sand() : TX.grass(), roughness: 1 }),
     gravel: new THREE.MeshStandardMaterial({ map: TX.gravel(), roughness: 1 }),
     paint: new THREE.MeshStandardMaterial({ map: TX.runoffPaint(), roughness: 0.9 }),
@@ -85,6 +127,113 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
     check: new THREE.MeshStandardMaterial({ map: checkTex(), roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -3 }),
   };
   mat.asphalt.map.repeat.set(1, 1);
+  if (mat.asphalt.normalMap) mat.asphalt.normalMap.repeat.set(1, 1);
+  if (mat.asphalt.roughnessMap) mat.asphalt.roughnessMap.repeat.set(1, 1);
+
+  const setupAsphaltShader = (material) => {
+    material.userData.customUniforms = {
+      uWet: { value: 0 },
+      uLine: { value: 0 },
+      uTime: { value: 0 },
+    };
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uWet = material.userData.customUniforms.uWet;
+      shader.uniforms.uLine = material.userData.customUniforms.uLine;
+      shader.uniforms.uTime = material.userData.customUniforms.uTime;
+
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vWorldPos;
+        varying vec2 vAsphaltUv;`
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        '#include <worldpos_vertex>',
+        `#include <worldpos_vertex>
+        vWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vAsphaltUv = uv;`
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <common>',
+        `#include <common>
+        uniform float uWet;
+        uniform float uLine;
+        uniform float uTime;
+        varying vec3 vWorldPos;
+        varying vec2 vAsphaltUv;
+
+        float ash21(vec2 p) {
+          p = fract(p * vec2(234.34, 435.345));
+          p += dot(p, p + 34.23);
+          return fract(p.x * p.y);
+        }
+        float asnoise2(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(ash21(i + vec2(0.0,0.0)), ash21(i + vec2(1.0,0.0)), u.x),
+                     mix(ash21(i + vec2(0.0,1.0)), ash21(i + vec2(1.0,1.0)), u.x), u.y);
+        }
+        float aspuddleFbm(vec2 p) {
+          return asnoise2(p) * 0.55 + asnoise2(p * 2.1 + 1.2) * 0.30 + asnoise2(p * 4.4 + 5.7) * 0.15;
+        }`
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+        if (uWet > 0.001) {
+          vec2 wPos = vWorldPos.xz * 0.028;
+          float n = aspuddleFbm(wPos);
+          float edgeBias = smoothstep(0.10, 0.48, abs(vAsphaltUv.x - 0.5));
+          float puddleThresh = mix(0.66, 0.52, edgeBias);
+          float puddle = smoothstep(puddleThresh, puddleThresh + 0.12, n) * uWet;
+          puddle *= mix(1.0, 0.20, uLine * (1.0 - edgeBias));
+
+          float wetRoughness = mix(0.84, 0.04, puddle);
+          roughnessFactor = mix(roughnessFactor, wetRoughness, uWet);
+        }`
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+        if (uWet > 0.001) {
+          vec2 wPos = vWorldPos.xz * 0.028;
+          float n = aspuddleFbm(wPos);
+          float edgeBias = smoothstep(0.10, 0.48, abs(vAsphaltUv.x - 0.5));
+          float puddleThresh = mix(0.66, 0.52, edgeBias);
+          float puddle = smoothstep(puddleThresh, puddleThresh + 0.12, n) * uWet;
+          puddle *= mix(1.0, 0.20, uLine * (1.0 - edgeBias));
+
+          if (puddle > 0.01) {
+            vec3 flatNormal = vec3(0.0, 0.0, 1.0);
+            float ripple = sin((vWorldPos.x + vWorldPos.z) * 14.0 + uTime * 6.0) * 0.025 * uWet;
+            flatNormal.xy += vec2(ripple);
+            normal = normalize(mix(normal, flatNormal, puddle * 0.90));
+          }
+        }`
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        if (uWet > 0.001) {
+          vec2 wPos = vWorldPos.xz * 0.028;
+          float n = aspuddleFbm(wPos);
+          float edgeBias = smoothstep(0.10, 0.48, abs(vAsphaltUv.x - 0.5));
+          float puddleThresh = mix(0.66, 0.52, edgeBias);
+          float puddle = smoothstep(puddleThresh, puddleThresh + 0.12, n) * uWet;
+          puddle *= mix(1.0, 0.20, uLine * (1.0 - edgeBias));
+
+          diffuseColor.rgb *= mix(1.0, 0.48 - 0.15 * puddle, uWet);
+        }`
+      );
+    };
+  };
+  setupAsphaltShader(mat.asphalt);
+  setupAsphaltShader(mat.verge);
 
   // ---------- pista
   {
@@ -124,7 +273,10 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
       const s = i * STEP, c = T.ideal[T.idx(s)];
       rows.push([[...pos(s, c - 1.6, 0.012), 0, s / 30], [...pos(s, c + 1.6, 0.012), 1, s / 30]]);
     }
-    r.strip(rows); scene.add(new THREE.Mesh(r.geo(), mat.rubber));
+    r.strip(rows);
+    const mGoma = new THREE.Mesh(r.geo(), mat.rubber);
+    mGoma.receiveShadow = true;
+    scene.add(mGoma);
   }
   // carril de boxes: eje (también antes de la entrada y después de la salida, pegado al borde) y tramos donde pisa la pista
   const pit = T.pit, PH = pit.halfW;
@@ -158,8 +310,9 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
     along(-1, 2, -HW, HW, 0.013, mat.check, 1, 1, true, 1);
     for (const gs of T.grid) {
       const d = gs.d;
-      along(gs.s + 1.2, 0.25, d - 1.4, d + 1.4, 0.013, mat.white, 1, 1, true, 1);
-      along(gs.s - 3.5, 4.7, d - 1.5, d - 1.35, 0.013, mat.white, 1, 1, true, 1);
+      // casilla a la medida del coche (su origen va entre ejes: el morro llega a +3,1 m); antes el morro pisaba la raya
+      along(gs.s + 3.25, 0.25, d - 1.4, d + 1.4, 0.013, mat.white, 1, 1, true, 1);
+      along(gs.s - 2.2, 5.45, d - 1.5, d - 1.35, 0.013, mat.white, 1, 1, true, 1);
     }
   }
   // pianos en curvas
@@ -745,10 +898,23 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
   sun.castShadow = true;
   const smap = quality === 'low' ? 1024 : 2048;
   sun.shadow.mapSize.set(smap, smap);
-  const S = 70; Object.assign(sun.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 10, far: 700 });
-  sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.04;
+  const S = 52; Object.assign(sun.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 10, far: 650 });
+  sun.shadow.bias = -0.00008; sun.shadow.normalBias = 0.008;
   scene.add(sun); scene.add(sun.target);
   world.sun = sun; world.sunDir = sunDir;
+
+  const shadowGeo = new THREE.PlaneGeometry(2.4, 6.2);
+  shadowGeo.rotateX(-Math.PI / 2);
+  shadowGeo.translate(0, 0.014, 0.1);
+  const shadowMat = new THREE.MeshBasicMaterial({
+    map: TX.carContactShadow(),
+    transparent: true,
+    opacity: 0.88,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
 
   // ---------- actualización por frame
   let scrT = 0;
@@ -855,10 +1021,58 @@ export function buildWorld(T, scene, renderer, quality = 'high') {
   };
 
   world.update = (dt, sim, focus, camPos) => {
-    // la sombra sigue a la cámara
+    // sombra de contacto en cada coche
+    if (!world._carShadowsAttached && scene.children.length > 0) {
+      let count = 0;
+      for (const obj of scene.children) {
+        if (obj.isGroup && !obj.userData.hasContactShadow && obj.children.length === 1 && obj.children[0]?.children?.[0]?.children?.length === 2) {
+          obj.userData.hasContactShadow = true;
+          const sMesh = new THREE.Mesh(shadowGeo, shadowMat);
+          sMesh.castShadow = false;
+          sMesh.receiveShadow = false;
+          sMesh.renderOrder = 2;
+          obj.add(sMesh);
+          count++;
+        }
+      }
+      if (count >= 20) world._carShadowsAttached = true;
+    }
+    // la sombra sigue al coche enfocado (o a la cámara)
     const c = focus || camPos;
     sun.position.set(c.x + sunDir.x * 300, c.y + sunDir.y * 300, c.z + sunDir.z * 300);
     sun.target.position.copy(c);
+
+    // respuesta dinámica de asfalto y charcos según sim.wx
+    const wx = sim?.wx;
+    const wet = wx ? (wx.line * 0.6 + wx.wet * 0.4) : 0;
+    const lineWet = wx ? wx.line : 0;
+    const wetVal = THREE.MathUtils.clamp(wet * 1.5, 0, 1);
+    const lineVal = THREE.MathUtils.clamp(lineWet * 1.5, 0, 1);
+    const nowTime = (performance.now() / 1000) % 3600;
+
+    for (const m of [mat.asphalt, mat.verge]) {
+      const u = m.userData.customUniforms;
+      if (u) {
+        u.uWet.value = wetVal;
+        u.uLine.value = lineVal;
+        u.uTime.value = nowTime;
+      }
+    }
+
+    // weatherFx.update fija envMapIntensity y roughness antes; aquí ajustamos para evitar
+    // la sábana blanca en mojado y garantizar brillo suave y uniforme en seco
+    if (wet < 0.01) {
+      mat.asphalt.roughness = 0.90;
+      mat.asphalt.envMapIntensity = 0.35;
+      mat.verge.roughness = 0.92;
+      mat.verge.envMapIntensity = 0.35;
+    } else {
+      const k = Math.min(1, wet * 1.6);
+      mat.asphalt.roughness = THREE.MathUtils.lerp(0.90, 0.84, k);
+      mat.asphalt.envMapIntensity = THREE.MathUtils.lerp(0.35, 0.38, k);
+      mat.verge.roughness = THREE.MathUtils.lerp(0.92, 0.86, k);
+      mat.verge.envMapIntensity = THREE.MathUtils.lerp(0.35, 0.35, k);
+    }
     if (world.ferris) world.ferris.rotation.z += dt * 0.03;
     // semáforo
     const lit = sim.session?.id === 'RACE' && sim.session.phase === 'lights' ? sim.lights : 0;

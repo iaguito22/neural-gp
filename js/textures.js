@@ -29,23 +29,142 @@ export const SPONSORS = [
 
 export function asphalt() {
   return once('asphalt', () => {
-    const c = canvas(512, 512), g = c.getContext('2d'), r = rnd(7);
-    g.fillStyle = '#3d3e41'; g.fillRect(0, 0, 512, 512);
-    const img = g.getImageData(0, 0, 512, 512), d = img.data;
-    for (let i = 0; i < d.length; i += 4) { const n = (r() - 0.5) * 16 + (r() < 0.015 ? 18 : 0); d[i] += n + 1; d[i + 1] += n; d[i + 2] += n - 1; }
+    const W = 512, H = 512, c = canvas(W, H), g = c.getContext('2d'), r = rnd(7);
+    // Base gris asfalto circuito uniforme y neutro
+    g.fillStyle = '#37393d';
+    g.fillRect(0, 0, W, H);
+    const img = g.getImageData(0, 0, W, H), d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      // Grano fino de árido y bitumen apenas visible (+/- 6 a 10)
+      const n = (r() - 0.5) * 14 + (r() < 0.01 ? 16 : (r() > 0.99 ? -14 : 0));
+      d[i] = Math.min(255, Math.max(0, d[i] + n));
+      d[i + 1] = Math.min(255, Math.max(0, d[i + 1] + n));
+      d[i + 2] = Math.min(255, Math.max(0, d[i + 2] + n));
+    }
     g.putImageData(img, 0, 0);
-    // parches y reparaciones suaves
-    for (let i = 0; i < 6; i++) { g.fillStyle = `rgba(15,15,16,${0.03 + r() * 0.04})`; g.fillRect(r() * 512, r() * 512, 60 + r() * 160, 40 + r() * 120); }
     const t = tex(c); t.repeat.set(1, 1); return t;
+  });
+}
+
+export function asphaltNormal() {
+  return once('asphaltN', () => {
+    const W = 512, H = 512, c = canvas(W, H), g = c.getContext('2d'), r = rnd(15);
+    const height = new Float32Array(W * H);
+    
+    // 1. Árido fino granular uniforme
+    for (let i = 0; i < height.length; i++) {
+      height[i] = (r() - 0.5) * 0.28;
+    }
+    
+    // 2. Gravilla compactada (micro-gránulos)
+    for (let k = 0; k < 6000; k++) {
+      const cx = Math.floor(r() * W), cy = Math.floor(r() * H), rad = 1 + Math.floor(r() * 2);
+      const hVal = (r() - 0.5) * 0.35;
+      for (let dy = -rad; dy <= rad; dy++) {
+        for (let dx = -rad; dx <= rad; dx++) {
+          if (dx * dx + dy * dy <= rad * rad) {
+            const px = (cx + dx + W) % W, py = (cy + dy + H) % H;
+            height[py * W + px] += hVal * (1 - Math.hypot(dx, dy) / (rad + 0.5));
+          }
+        }
+      }
+    }
+    
+    // 3. Micro-estrías longitudinales a lo largo de Y (dirección de marcha / s)
+    // Esto crea reflejos alargados y rotos (anisotropía física del asfalto rodado)
+    for (let k = 0; k < 1200; k++) {
+      const cx = Math.floor(r() * W), y0 = Math.floor(r() * H), len = 14 + Math.floor(r() * 34);
+      const strVal = (r() - 0.5) * 0.22;
+      for (let dy = 0; dy < len; dy++) {
+        const py = (y0 + dy) % H;
+        height[py * W + cx] += strVal;
+        if (cx > 0) height[py * W + (cx - 1)] += strVal * 0.5;
+        if (cx < W - 1) height[py * W + (cx + 1)] += strVal * 0.5;
+      }
+    }
+
+    const img = g.createImageData(W, H), d = img.data;
+    const scale = 1.1;
+    for (let y = 0; y < H; y++) {
+      const ym = (y - 1 + H) % H, yp = (y + 1) % H;
+      for (let x = 0; x < W; x++) {
+        const xm = (x - 1 + W) % W, xp = (x + 1) % W;
+        // Diferencias centrales con escala mayor en X para acentuar reflejos alargados en Y
+        const dx = (height[y * W + xp] - height[y * W + xm]) * scale * 1.35;
+        const dy = (height[yp * W + x] - height[ym * W + x]) * scale * 0.85;
+        const dz = 1.0;
+        const len = Math.hypot(dx, dy, dz);
+        const idx = (y * W + x) * 4;
+        d[idx] = Math.floor((-dx / len * 0.5 + 0.5) * 255);
+        d[idx + 1] = Math.floor((dy / len * 0.5 + 0.5) * 255);
+        d[idx + 2] = Math.floor((dz / len * 0.5 + 0.5) * 255);
+        d[idx + 3] = 255;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    return tex(c, true, false);
   });
 }
 
 export function asphaltRough() {
   return once('asphaltR', () => {
-    const c = canvas(256, 256), g = c.getContext('2d'), r = rnd(9);
-    g.fillStyle = '#c8c8c8'; g.fillRect(0, 0, 256, 256);
-    noise(g, 256, 256, 20000, (v) => `rgba(${v * 255},${v * 255},${v * 255},0.5)`, r);
+    const W = 512, H = 512, c = canvas(W, H), g = c.getContext('2d'), r = rnd(9);
+    const img = g.createImageData(W, H), d = img.data;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        // Micro-variación de rugosidad de alta frecuencia de áridos (sin manchas ni charcos estáticos)
+        const microNoise = (r() - 0.5) * 0.08;
+        const val = Math.min(255, Math.max(220, Math.floor((0.96 + microNoise) * 255)));
+        const idx = (y * W + x) * 4;
+        d[idx] = val;
+        d[idx + 1] = val;
+        d[idx + 2] = val;
+        d[idx + 3] = 255;
+      }
+    }
+    g.putImageData(img, 0, 0);
     return tex(c, true, false);
+  });
+}
+
+export function carContactShadow() {
+  return once('carContactShadow', () => {
+    const W = 256, H = 512, c = canvas(W, H), g = c.getContext('2d');
+    g.clearRect(0, 0, W, H);
+    
+    const drawPatch = (cx, cy, rx, ry, alpha) => {
+      g.save();
+      g.translate(cx, cy);
+      g.scale(rx, ry);
+      const grd = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+      grd.addColorStop(0, `rgba(0,0,0,${alpha})`);
+      grd.addColorStop(0.5, `rgba(0,0,0,${alpha * 0.7})`);
+      grd.addColorStop(0.85, `rgba(0,0,0,${alpha * 0.25})`);
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grd;
+      g.beginPath(); g.arc(0, 0, 1, 0, Math.PI * 2); g.fill();
+      g.restore();
+    };
+
+    // 1. Sombra amplia y difusa bajo todo el coche (Ambient Occlusion global)
+    drawPatch(128, 256, 110, 240, 0.45);
+
+    // 2. Suelo / pontones / difusor del monoplaza
+    drawPatch(128, 256, 75, 180, 0.75);
+    drawPatch(128, 280, 65, 140, 0.85);
+    drawPatch(128, 410, 60, 50, 0.80);
+    drawPatch(128, 90, 65, 45, 0.60);
+
+    // 3. Huella de contacto oscura e intensa bajo cada neumático (4 ruedas)
+    const fwX = 85, rwX = 83;
+    const fwY = 115, rwY = 410;
+    drawPatch(128 - fwX, fwY, 24, 38, 0.95);
+    drawPatch(128 + fwX, fwY, 24, 38, 0.95);
+    drawPatch(128 - rwX, rwY, 30, 44, 0.98);
+    drawPatch(128 + rwX, rwY, 30, 44, 0.98);
+
+    const t = tex(c, false, true);
+    return t;
   });
 }
 

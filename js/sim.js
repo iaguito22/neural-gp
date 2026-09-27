@@ -137,7 +137,7 @@ export class Sim {
     const W = this.wx; if (!W || (W.rain < 0.02 && W.wet < 0.02)) return 1;
     if (COMPOUNDS[car.tyre.c].wet) return 1;
     const unc = Math.max(Math.min(1, W.rain * 2.5) * (1 - Math.min(1, (car.wetEst || 0) * 2.5)), Math.min(1, (W.wet - W.line) * 2.5) * 0.6);
-    return 1 - 0.008 * unc * (1.2 - 0.6 * car.drv.agg);
+    return 1 - 0.0105 * unc * (1.2 - 0.6 * car.drv.agg);
   }
   evoFactor() { return 0.986 + 0.014 * (1 - Math.exp(-this.evo / 350)); }
 

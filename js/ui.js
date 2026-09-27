@@ -273,7 +273,7 @@ export class UI {
     const feed = $('feed');
     const d = document.createElement('div'); d.className = `note ${cls}`; d.innerHTML = `<span class="t">${tag}</span><span>${html}</span>`;
     feed.prepend(d);
-    while (feed.children.length > 5) feed.lastChild.remove();
+    while (feed.children.length > 4) feed.lastChild.remove();   // (debajo va la radio)
     setTimeout(() => d.remove(), ms);
   }
   onEvent(e) {

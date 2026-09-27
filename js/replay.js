@@ -74,7 +74,7 @@ export class Replay {
     this.savedDir = { auto: D.auto, type: D.type, focus: D.focus };
     this.active = true; this.t = t0; this.t0 = t0; this.t1 = t1; this.car = car; this.rate = 1; this.why = why;
     this.shot = -1; this.shotT = 0; this.shots = ['track', 'chase', 'heli', 'track', 'tcam'];
-    D.auto = false; D.setFocus(car);
+    D.auto = false; D.setFocus(car, false);
     this.bar.classList.add('on'); this.drawBar();
     document.body.classList.add('replay');
     return true;
@@ -89,7 +89,8 @@ export class Replay {
       c.drs = o.drs; c.state = o.state; c.inPit = o.inPit; c.pitPhase = o.pitPhase; c.mistake = o.mistake; c.out = o.out; c.tyre.c = o.tc;
     });
     const D = this.dir, S = this.savedDir;
-    D.auto = S.auto; D.type = S.type; D.setFocus(S.focus); D.first = true;
+    // (setFocus sin «manual»: con él se apagaba el auto y la realización no volvía tras la repetición)
+    D.setFocus(S.focus, false); D.auto = S.auto; D.type = S.type; D.first = true; D.trackCam = null; D.shotT = 0; D.changed?.();
     this.active = false; this.bar.classList.remove('on'); document.body.classList.remove('replay');
     this.lastAuto = this.sim.t;
   }

@@ -803,7 +803,8 @@ export class EngineAudio {
     // Silbido de Turbocharger y Soplado directo de aire (brillo F1)
     const turboFreq = 3400 + (effRpm - 4800) * 0.22 + curThrottle * 1600;
     this.turboOsc.frequency.setTargetAtTime(turboFreq * (cam === 'track' ? focusDoppler : 1), t, 0.03);
-    const turboVol = (0.015 + 0.085 * Math.pow(curThrottle, 1.3)) * (onboard ? 1.0 : 0.85);
+    // (flojito: un seno puro a 4 kHz fuerte era lo que sonaba «eléctrico, a alien» al acelerar)
+    const turboVol = (0.004 + 0.02 * Math.pow(curThrottle, 1.3)) * (onboard ? 1.0 : 0.85);
     this.turboGain.gain.setTargetAtTime(turboVol, t, 0.04);
 
     const blowVol = curThrottle * 0.085 * Math.min(1, carSpeed / 15);
@@ -813,7 +814,7 @@ export class EngineAudio {
     const ersFreq = 1800 + carSpeed * 28;
     this.ersOsc.frequency.setTargetAtTime(ersFreq, t, 0.03);
     const isErsActive = (curThrottle > 0.4 || curBrake > 0.3) && carSpeed > 10;
-    const ersVol = isErsActive ? (curThrottle > 0.4 ? 0.065 : 0.085) : 0;
+    const ersVol = isErsActive ? (curThrottle > 0.4 ? 0.006 : 0.02) : 0;   // se oye sobre todo al regenerar en la frenada
     this.ersGain.gain.setTargetAtTime(ersVol, t, 0.05);
 
     // Ganancia continua del motor (salvo corte de encendido explícito)
