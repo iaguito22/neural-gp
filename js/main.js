@@ -26,11 +26,8 @@ const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
 const params = new URLSearchParams(location.search);
 const DEFAULT_SPEED = { FP: 1, Q1: 1, Q2: 1, Q3: 1, RACE: 1 };
 
-async function main() {
-  await document.fonts?.ready;
-  const settings = readJSON(SETTINGS) || {};
-  const quality = params.get('q') || settings.quality || 'high';
-  const trackId = CIRCUITS[params.get('track')] ? params.get('track') : CIRCUITS[settings.track] ? settings.track : 'gp';
+async function main(choice) {
+  const quality = choice.quality, trackId = choice.track;
   try { for (const k of Object.keys(localStorage)) if (k.startsWith('ngp-brains')) localStorage.removeItem(k); } catch { /* sin almacenamiento */ }
   const canvas = document.getElementById('view');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -52,8 +49,8 @@ async function main() {
   msg('Preparando los 22 monoplazas…'); await frame();
   const weatherFx = buildWeather(scene, world, scenery, renderer, camera, quality);
   world.autoOccluders(scene);
-  const sim = new Sim(T, { raceLaps: +(params.get('laps') || settings.raceLaps || 20), brains: {} });
-  sim.weatherMode = params.get('wx') || settings.weather || 'random';
+  const sim = new Sim(T, { raceLaps: choice.raceLaps, brains: {} });
+  sim.weatherMode = choice.weather;
   const visuals = sim.cars.map((car) => { const v = buildCar(car.team, car.drv); scene.add(v.root); return v; });
   const fx = buildFx(scene, T, sim, visuals, world);
 
@@ -77,7 +74,7 @@ async function main() {
     for (const o of hidden) o.visible = false;
   }
   const app = {
-    sim, T, director, speed: 1, lastSpeed: 1, skipping: false, audio: new EngineAudio(),
+    sim, T, director, speed: 1, lastSpeed: 1, skipping: false, audio: choice.audio,
     setSpeed(s) { if (s > 0) this.lastSpeed = s; this.speed = s; ui.syncButtons(); },
     skip() { if (!sim.session?.done) { this.skipping = true; document.getElementById('skipBar')?.remove(); const d = document.createElement('div'); d.id = 'skipBar'; d.innerHTML = '<b>Simulando el resto de la sesión…</b><div class="track"><i></i></div>'; document.getElementById('hud').appendChild(d); } },
     restart() { location.reload(); },   // fin de semana nuevo: pilotos sin nada aprendido
@@ -89,7 +86,7 @@ async function main() {
     },
   };
   const ui = new UI(app);
-  const radio = new Radio(sim, director, app);
+  const radio = app.radio = new Radio(sim, director, app);
   const replay = app.replay = new Replay(app, sim, director);
 
   function startSession(id) {
@@ -202,11 +199,27 @@ async function main() {
     renderer.render(scene, camera);
   }
 
-  // --- pantalla de inicio
+  // --- empieza
   document.getElementById('loading').remove();
+  if (choice.mode === 'mgr') { app.manager = new Manager(sim, director, choice.team); director.setFocus(app.manager.cars[0]); }
+  ui.syncButtons();
+  if (!params.get('autostart')) startSession(params.get('start') || 'FP');
+  if (params.get('autostart')) { ui.closeModal(); startSession(params.get('autostart')); }
+  requestAnimationFrame(loop);
+  window.__app = app; window.__vis = visuals; window.__world = world; window.__sim = sim; window.__dir = director; window.__scene = scene; window.__THREE = THREE; window.__renderer = renderer; window.__fx = fx;
+}
+
+// --- pantalla de inicio: sale al momento, sin construir nada (el circuito elegido se carga al empezar)
+async function startScreen() {
+  await document.fonts?.ready;
+  const settings = readJSON(SETTINGS) || {};
+  const quality = params.get('q') || settings.quality || 'high';
+  const trackId = CIRCUITS[params.get('track')] ? params.get('track') : CIRCUITS[settings.track] ? settings.track : 'gp';
+  const laps = +(params.get('laps') || settings.raceLaps || 20), wx = params.get('wx') || settings.weather || 'random';
+  const loading = document.getElementById('loading'); loading.style.display = 'none'; document.body.classList.add('menu');
   // circuitos: dibujo del trazado de cada uno (del eje real), longitud y curvas
   const trackCard = (c) => {
-    const TT = c.id === trackId ? T : buildTrack(c.id);
+    const TT = buildTrack(c.id);
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
     for (let i = 0; i < TT.N; i += 10) { x0 = Math.min(x0, TT.x[i]); x1 = Math.max(x1, TT.x[i]); z0 = Math.min(z0, TT.z[i]); z1 = Math.max(z1, TT.z[i]); }
     const W = 150, H = 96, k = Math.min((W - 12) / (x1 - x0), (H - 12) / (z1 - z0)), ox = (W - (x1 - x0) * k) / 2, oz = (H - (z1 - z0) * k) / 2;
@@ -224,27 +237,28 @@ async function main() {
     iQ: [['high', 'Alta'], ['low', 'Baja']],
   };
   const curMode = settings.mode === 'mgr' ? 'mgr' : 'watch', curTeam = TEAMS.some((t) => t.id === settings.team) ? settings.team : TEAMS[0].id;
-  const intro = ui.modal(`<div class="start">
+  const intro = document.createElement('div'); intro.className = 'modal'; document.body.appendChild(intro);
+  intro.innerHTML = `<div class="sheet"><div class="start">
       <div class="st-l">
         <div class="logo">NEURAL <i>GP</i></div>
         <p class="tag">Veintidós pilotos con IA que aprenden dando vueltas. Buscan la trazada en libres, la exprimen en clasificación y pelean en carrera. Cada fin de semana empiezan de cero.</p>
         <h3>Circuito</h3>
         <div class="tcards">${Object.values(CIRCUITS).map(trackCard).join('')}</div>
         <h3>El fin de semana</h3>
-        <div class="sched"><div><b>Libres</b><span>30 min · buscan trazada y límite</span></div><div><b>Clasificación</b><span>Q1 12′ · Q2 10′ · Q3 9′</span></div><div><b>Carrera</b><span id="schedLaps">${sim.raceLaps} vueltas · paradas y peleas</span></div></div>
+        <div class="sched"><div><b>Libres</b><span>30 min · buscan trazada y límite</span></div><div><b>Clasificación</b><span>Q1 12′ · Q2 10′ · Q3 9′</span></div><div><b>Carrera</b><span id="schedLaps">${laps} vueltas · paradas y peleas</span></div></div>
       </div>
       <div class="st-r">
         <h3>Modo</h3>${seg('iMode', O.iMode, curMode)}
         <div class="teams ${curMode === 'mgr' ? '' : 'off'}">${TEAMS.map((t) => `<button data-team="${t.id}" class="${t.id === curTeam ? 'on' : ''}" title="${t.name}"><i style="background:${t.c1}"></i><i style="background:${t.c2}"></i><span>${t.short}</span></button>`).join('')}</div>
         <p class="hint">${curMode === 'mgr' ? 'Llevas a los dos pilotos desde el muro: ritmo, paradas, neumáticos y alerón.' : 'La retransmisión se realiza sola; puedes elegir piloto y plano cuando quieras.'}</p>
-        <h3>Tiempo</h3>${seg('iWx', O.iWx, sim.weatherMode)}
-        <h3>Vueltas de carrera</h3>${seg('iLaps', O.iLaps, sim.raceLaps)}
+        <h3>Tiempo</h3>${seg('iWx', O.iWx, wx)}
+        <h3>Vueltas de carrera</h3>${seg('iLaps', O.iLaps, laps)}
         <h3>Calidad gráfica</h3>${seg('iQ', O.iQ, quality)}
         <button class="btn go" id="iGo">Empezar el fin de semana</button>
         <p class="keys"><b>A</b> auto · <b>1–8</b> planos · <b>Espacio</b> pausa · <b>+/−</b> velocidad · <b>R</b> repetición · <b>L</b> aprendizaje · <b>Esc</b> menú</p>
       </div>
-      ${hidden('iTrack', Object.values(CIRCUITS).map((c) => [c.id, c.name]), trackId)}${hidden('iLaps', O.iLaps, sim.raceLaps)}${hidden('iWx', O.iWx, sim.weatherMode)}${hidden('iMode', O.iMode, curMode)}${hidden('iQ', O.iQ, quality)}${hidden('iTeam', TEAMS.map((t) => [t.id, t.name]), curTeam)}
-    </div>`);
+      ${hidden('iTrack', Object.values(CIRCUITS).map((c) => [c.id, c.name]), trackId)}${hidden('iLaps', O.iLaps, laps)}${hidden('iWx', O.iWx, wx)}${hidden('iMode', O.iMode, curMode)}${hidden('iQ', O.iQ, quality)}${hidden('iTeam', TEAMS.map((t) => [t.id, t.name]), curTeam)}
+    </div></div>`;
   intro.querySelector('.sheet').classList.add('startSheet');
   // los controles visibles mueven los <select> ocultos (que son los que se leen al empezar)
   intro.querySelectorAll('.seg').forEach((g) => g.addEventListener('click', (e) => {
@@ -254,28 +268,28 @@ async function main() {
     if (g.dataset.for === 'iLaps') intro.querySelector('#schedLaps').textContent = `${b.dataset.v} vueltas · paradas y peleas`;
   }));
   intro.querySelectorAll('[data-team]').forEach((b) => (b.onclick = () => { intro.querySelectorAll('[data-team]').forEach((x) => x.classList.toggle('on', x === b)); intro.querySelector('#iTeam').value = b.dataset.team; }));
-  intro.querySelectorAll('[data-track]').forEach((b) => (b.onclick = () => { if (b.dataset.track === trackId) return; const s = intro.querySelector('#iTrack'); s.value = b.dataset.track; s.dispatchEvent(new Event('change')); }));
-  intro.querySelector('#iGo').onclick = () => {
-    sim.raceLaps = +intro.querySelector('#iLaps').value;
-    const q = intro.querySelector('#iQ').value, tk = intro.querySelector('#iTrack').value;
-    sim.weatherMode = intro.querySelector('#iWx').value;
-    const mode = intro.querySelector('#iMode').value, team = intro.querySelector('#iTeam').value;
-    writeJSON(SETTINGS, { ...settings, quality: q, track: tk, raceLaps: sim.raceLaps, weather: sim.weatherMode, mode, team });
-    // otra calidad u otro circuito: se recarga con esos ajustes (sin parámetros en la URL que los contradigan)
-    if (q !== quality || tk !== trackId) { location.href = location.pathname; return; }
-    if (mode === 'mgr') { app.manager = new Manager(sim, director, team); director.setFocus(app.manager.cars[0]); }
-    ui.closeModal(); app.audio.start(); ui.syncButtons(); startSession(params.get('start') || 'FP');
-  };
-  // al cambiar de circuito se carga ya (la pantalla de inicio vuelve a salir con el circuito nuevo)
+  // elegir circuito no carga nada: se carga al empezar
+  const pickTrack = (id) => { intro.querySelectorAll('[data-track]').forEach((x) => x.classList.toggle('on', x.dataset.track === id)); intro.querySelector('#iTrack').value = id; };
+  intro.querySelectorAll('[data-track]').forEach((b) => (b.onclick = () => pickTrack(b.dataset.track)));
+  intro.querySelector('#iTrack').onchange = (e) => pickTrack(e.target.value);
   intro.querySelector('#iMode').onchange = (e) => {
     const m = e.target.value === 'mgr';
     intro.querySelector('.teams').classList.toggle('off', !m);
     intro.querySelector('.hint').textContent = m ? 'Llevas a los dos pilotos desde el muro: ritmo, paradas, neumáticos y alerón.' : 'La retransmisión se realiza sola; puedes elegir piloto y plano cuando quieras.';
   };
-  intro.querySelector('#iTrack').onchange = (e) => { writeJSON(SETTINGS, { ...settings, quality: intro.querySelector('#iQ').value, track: e.target.value, raceLaps: +intro.querySelector('#iLaps').value }); location.href = location.pathname; };
-  if (params.get('autostart')) { ui.closeModal(); startSession(params.get('autostart')); }
-  requestAnimationFrame(loop);
-  window.__app = app; window.__vis = visuals; window.__world = world; window.__sim = sim; window.__dir = director; window.__scene = scene; window.__THREE = THREE; window.__renderer = renderer; window.__fx = fx;
+  return new Promise((resolve) => {
+    const go = () => {
+      const v = (id) => intro.querySelector('#' + id).value;
+      const choice = { quality: v('iQ'), track: v('iTrack'), raceLaps: +v('iLaps'), weather: v('iWx'), mode: v('iMode'), team: v('iTeam') };
+      writeJSON(SETTINGS, { ...settings, ...choice });
+      // el sonido se arranca aquí, con el clic (el navegador no deja hacerlo después de la carga)
+      choice.audio = new EngineAudio(); choice.audio.start();
+      intro.remove(); loading.style.display = ''; document.body.classList.remove('menu');
+      resolve(choice);
+    };
+    intro.querySelector('#iGo').onclick = go;
+    if (params.get('autostart')) go();
+  });
 }
 
-main().catch((e) => { console.error(e); const el = document.getElementById('loadMsg'); if (el) el.textContent = 'Error: ' + e.message; });
+startScreen().then(main).catch((e) => { console.error(e); const el = document.getElementById('loadMsg'); if (el) el.textContent = 'Error: ' + e.message; });

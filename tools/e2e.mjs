@@ -20,13 +20,14 @@ if (a.track && (await ev(() => document.getElementById('iTrack').value)) !== a.t
   await setSel('iTrack', a.track); await p.waitForTimeout(1500); await p.waitForSelector('#iGo', { timeout: 150000 });
 }
 check('portada: 4 tarjetas de circuito', (await p.$$('.tcard')).length === 4);
+check('portada sin cargar el circuito', !(await ev(() => !!window.__sim)));
 await click('.seg[data-for="iMode"] button[data-v="mgr"]');
 check('portada: mánager muestra equipos', await ev(() => !document.querySelector('.teams').classList.contains('off')));
 if (a.mode !== 'mgr') await click('.seg[data-for="iMode"] button[data-v="watch"]');
 await click('.seg[data-for="iLaps"] button[data-v="10"]');
 check('portada: vueltas → programa', await ev(() => document.getElementById('schedLaps').textContent.startsWith('10')));
 await click('.seg[data-for="iWx"] button[data-v="mixed"]');
-await click('#iGo'); await p.waitForTimeout(2500);
+await click('#iGo'); await p.waitForFunction(() => window.__sim?.session, null, { timeout: 150000 }); await p.waitForTimeout(1500);
 check('empieza en libres', await ev(() => window.__sim.session?.id === 'FP'));
 check('10 vueltas de carrera', await ev(() => window.__sim.raceLaps === 10));
 check('tiempo variable', await ev(() => window.__sim.weatherMode === 'mixed'));

@@ -1,8 +1,8 @@
-// Radios piloto ⇄ equipo. Salen de los eventos de la sim: sobre todo del coche enfocado y de lo gordo (líder, podio,
-// accidentes). Se ven en un panel del HUD y, con el sonido puesto y a velocidad normal, se oyen: pitido de radio y
+// Radios piloto ⇄ equipo, de estrategia: salen de los eventos de la sim para el coche enfocado (y los dos del
+// equipo en el mánager). Se ven en un panel del HUD y, con el sonido puesto y a velocidad normal, se oyen: pitido de radio y
 // voz sintetizada del navegador (speechSynthesis), más grave el ingeniero que el piloto.
+import { COMPOUNDS } from './teams.js';
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
-const P = (n) => `P${n}`;
 
 export class Radio {
   constructor(sim, dir, app) {
@@ -17,8 +17,8 @@ export class Radio {
     sim.on((e) => this.onEvent(e));
   }
 
-  // ¿merece radio? el enfocado siempre; los demás solo si pasa algo gordo
-  focusOr(car, big) { return car === this.dir.focus || big; }
+  // radios «mías»: el coche enfocado y, en el mánager, los dos del equipo
+  mine(c) { return c === this.dir.focus || !!this.app.manager?.cars.includes(c); }
   once(car, key, secs) {
     const k = car.code + key, t = this.sim.t, prev = this.last.get(k);
     if (prev != null && t - prev < secs && t >= prev) return false;
@@ -30,64 +30,137 @@ export class Radio {
     this.q.push({ car, lines, prio, t: this.sim.t });
     this.q.sort((a, b) => b.prio - a.prio);
   }
+  // compuesto que se pondrá en la próxima parada
+  nextTyre(c) { return c.mgr?.box ? c.mgr.tyre : c.wxC || c.strategy?.stints[c.stint + 1]?.c || c.tyre.c; }
+  inWindow(c) { const st = c.strategy?.stints[c.stint]; return !!st && c.stint < c.strategy.stints.length - 1 && c.lap + 3 >= st.to; }
+  // vecinos en carrera: el de delante y el de detrás en la clasificación
+  around(c) { const o = this.sim.raceOrder || [], k = o.indexOf(c); return { ah: k > 0 ? o[k - 1] : null, bh: k >= 0 && k < o.length - 1 ? o[k + 1] : null }; }
+  // próximo cambio en el guion del tiempo
+  forecast() {
+    const W = this.sim.wx; if (!W?.ev) return null;
+    const nx = W.ev.find((e) => e.t > this.sim.t); if (!nx) return null;
+    return { mins: Math.max(1, Math.round((nx.t - this.sim.t) / 60)), rain: nx.rain, more: nx.rain > W.target + 0.05 };
+  }
 
+  // Solo radios de estrategia: plan, ventana de parada, rivales que paran, huecos que se abren o se cierran,
+  // degradación, lluvia, VSC y daños que obligan a parar. Nada de «buen adelantamiento».
   onEvent(e) {
     const s = this.sim, c = e.car, race = s.session?.id === 'RACE', f = this.dir.focus;
-    if (!c && e.type !== 'weather') return;
-    const eng = c ? c.drv.first : '';
-    switch (e.type) {
-      case 'lockup':
-        if (c === f && e.sev > 0.5 && this.once(c, 'lock', 40)) this.say(c, [['d', pick([`Me he pasado en la ${e.corner || 'frenada'}, he bloqueado.`, 'Bloqueo delante, creo que he cuadrado la goma.', 'Uf, bloqueo. Vibra un poco.'])], ['e', pick(['Entendido, cuida las frenadas.', 'Copiado. Vigilamos la goma.', 'Recibido, tranquilo.'])]]);
-        break;
-      case 'mistake':
-        if (e.kind === 'spin' && this.focusOr(c, race && c.pos <= 5) && this.once(c, 'spin', 30)) this.say(c, [['d', pick(['¡Trompo, trompo!', '¡Se me ha ido la trasera!', '¡Me he girado!'])], ['e', pick([`${eng}, ¿estás bien? ¿Puedes seguir?`, 'Copiado. Vuelve con cuidado, viene tráfico.'])]], 3);
-        else if (e.kind === 'off' && c === f && this.once(c, 'off', 45)) this.say(c, [['d', pick(['Me he salido, perdón.', 'Me he ido largo.', 'Fuera de pista, vuelvo.'])]]);
-        break;
-      case 'debris':
-        if (e.broken && this.focusOr(c, race && c.pos <= 6) && this.once(c, 'dmg' + e.part, 60)) {
-          const what = e.part === 'fw' ? 'el alerón delantero' : e.part === 'rw' ? 'el alerón trasero' : 'la suspensión';
-          this.say(c, [['d', pick([`¡He roto ${what}!`, `Tengo daños, ${what}.`])], ['e', race ? pick(['Box, box. Entra esta vuelta.', 'Lo vemos. Box esta vuelta, cambiamos piezas.']) : 'Recibido, vuelve a boxes.']], 3);
+    const T = (x) => COMPOUNDS[x]?.name.toLowerCase() || x;
+    if (e.type === 'start') {
+      for (const m of this.app.manager?.cars || [f]) {
+        const st = m.strategy?.stints || []; if (!st.length) continue;
+        const plan = st.map((x) => T(x.c)).join(' → ');
+        this.say(m, [['e', st.length > 1 ? `Plan A: ${plan}. Parada hacia la vuelta ${st[0].to}.` : `Plan: sin paradas con ${T(st[0].c)}. Cuida la goma.`], ['d', 'Copiado.']], 2);
+      }
+      return;
+    }
+    if (e.type === 'flag' && race) {
+      for (const m of this.app.manager?.cars || [f]) {
+        if (!m || m.retired || m.finished) continue;
+        if (e.flag === 'VSC') this.say(m, [['e', this.inWindow(m) || m.tyre.wear > 0.45 ? `VSC, VSC. Box, box: parada barata. Ponemos ${T(this.nextTyre(m))}.` : 'VSC. Nos quedamos fuera, respeta el delta.']], 3);
+        else if (e.flag === 'GREEN' && this.once(m, 'green', 20)) this.say(m, [['e', 'Verde, verde. Fuera VSC.']], 2);
+      }
+      return;
+    }
+    if (e.type === 'weather') {
+      const fc = this.forecast();
+      if (e.what === 'rainStart' && f && this.once(f, 'rain', 90)) this.say(f, [['d', pick(['Empieza a llover.', 'Gotas en la visera.'])], ['e', fc && fc.more ? `Copiado. El radar dice que irá a más en ${fc.mins === 1 ? 'un minuto' : `unos ${fc.mins} minutos`}. Preparamos intermedios.` : 'Copiado. Es poca cosa según el radar: seguimos con lisos.']], 2);
+      else if (e.what === 'rainStop' && f && this.once(f, 'dry', 90)) this.say(f, [['e', 'Ha parado de llover. En cuanto se seque la trazada, lisos. Dinos qué notas.']], 2);
+      return;
+    }
+    if (!c || !this.mine(c)) {
+      // un rival directo entra a boxes: cubrir o alargar
+      if (race && e.type === 'pitin' && c) for (const m of this.app.manager?.cars || [f]) {
+        if (!m || m.inPit || m.retired) continue;
+        const { ah, bh } = this.around(m);
+        if ((c === ah && s.gapTo(m, c) < 3) || (c === bh && s.gapTo(c, m) < 3)) {
+          if (!this.once(m, 'rivalpit', 20)) continue;
+          const cover = this.inWindow(m) || m.tyre.wear > 0.5;
+          this.say(m, [['e', c === bh
+            ? (cover ? `${c.code} para detrás. Box esta vuelta para cubrir el undercut.` : `${c.code} para detrás. Nos quedamos fuera: empuja ahora, tienes que abrir hueco.`)
+            : (cover ? `${c.code} entra delante. Box la próxima, vamos a por el undercut.` : `${c.code} entra delante. Alargamos: vueltas limpias, a por el overcut.`)]], 2);
         }
-        break;
-      case 'contact':
-        if (!e.wall && c === f && e.sev > 5 && this.once(c, 'touch', 40)) this.say(c, [['d', pick([`¡Me ha tocado ${e.other?.code || ''}!`, '¡Contacto! ¿Qué hace?', '¡Me ha cerrado la puerta!'])], ['e', 'Copiado, lo están mirando.']], 2);
+      }
+      return;
+    }
+    const eng = c.drv.first;
+    switch (e.type) {
+      case 'debris':
+        if (e.broken && this.once(c, 'dmg' + e.part, 60)) {
+          const what = e.part === 'fw' ? 'el alerón delantero' : e.part === 'rw' ? 'el alerón trasero' : 'la suspensión';
+          this.say(c, [['d', `Tengo daños, ${what}.`], ['e', race ? `Box, box. Cambiamos ${e.part === 'susp' ? 'lo que podamos' : 'el alerón'} y ponemos ${T(this.nextTyre(c))}.` : 'Recibido, vuelve a boxes.']], 3);
+        }
         break;
       case 'retire':
-        if (this.focusOr(c, race && c.pos <= 8)) this.say(c, [['d', e.why === 'accidente' ? pick(['Estoy bien. Coche destrozado.', 'Estoy bien... lo siento, chicos.']) : pick(['Se acabó. Lo siento.', 'Paro el coche.'])], ['e', pick([`Mala suerte, ${eng}. Lo importante es que estás bien.`, 'Recibido. Aparca donde puedas.'])]], 4);
-        break;
-      case 'overtake':
-        if (c === f && race && this.once(c, 'ot', 25)) this.say(c, [['e', pick([`Buen adelantamiento. Ahora ${P(e.pos)}.`, `¡Bien hecho! ${P(e.pos)}.`, `Eso es. ${P(e.pos)}, sigue así.`])]]);
-        else if (e.other === f && race && this.once(e.other, 'lost', 30)) this.say(e.other, [['d', pick(['No tengo agarre.', 'No he podido defender.', '¿Cómo va de ritmo él?'])], ['e', pick(['Copiado. Tu ritmo es bueno, paciencia.', 'Entendido. Las gomas vendrán.'])]]);
+        this.say(c, [['e', e.why === 'accidente' ? `${eng}, ¿estás bien? Carrera terminada.` : 'Para el coche. Se acabó, lo siento.']], 4);
         break;
       case 'pitin':
-        if (c === f && race) this.say(c, [['e', pick(['Box, box. Box, box.', 'Box esta vuelta, box esta vuelta.'])], ['d', 'Copiado.']], 2);
+        if (race) this.say(c, [['e', `Box, box. Ponemos ${T(this.nextTyre(c))}.`], ['d', 'Copiado.']], 2);
         break;
-      case 'pitstop':
-        if (c === f && race) this.say(c, [['e', e.time > 4 ? pick(['Lo siento, problema en la parada. Empuja.', 'Parada lenta, perdona. Vamos.']) : pick(['Buena parada. Ahora a empujar.', 'Gomas nuevas. Empuja estas vueltas.'])]], 2);
-        break;
-      case 'fastest':
-        if (c === f && this.once(c, 'fast', 60)) this.say(c, [['e', race ? pick(['Vuelta rápida. Muy bien.', '¡Vuelta rápida de carrera!']) : pick(['P1, P1. Gran vuelta.', 'Eres el más rápido, bien hecho.'])]]);
-        break;
-      case 'limits':
-        if (c === f && this.once(c, 'lim', 60)) this.say(c, [['e', 'Te han quitado la vuelta, límites de pista.'], ['d', pick(['Vale, vale.', '¿En serio?'])]]);
+      case 'pitdone':
+        if (race) setTimeout(() => {
+          const { ah } = this.around(c), g = ah ? s.gapTo(c, ah) : 0;
+          this.say(c, [['e', `${e.time.toFixed(1)} segundos. Sales P${c.pos}${ah ? `, ${ah.code} a ${g.toFixed(1)} delante` : ''}. ${ah && g < 1.5 ? 'Ojo, tráfico: ataca con goma fría con cuidado.' : 'Empuja estas dos vueltas.'}`]], 2);
+        }, 1500);
         break;
       case 'knockout':
-        if (c === f) this.say(c, [['e', pick([`Lo siento, ${eng}. Eliminados.`, 'Fuera. No ha sido suficiente, lo siento.'])], ['d', pick(['Mierda. No tenía más.', 'Vale. Lo siento, chicos.'])]], 3);
+        this.say(c, [['e', `Fuera en ${s.session.id}, P${c.pos}. No ha sido suficiente, lo siento.`]], 3);
+        break;
+      case 'limits':
+        if (!race && this.once(c, 'lim', 60)) this.say(c, [['e', 'Vuelta anulada por límites de pista. Hay que hacer otra.']], 2);
         break;
       case 'finish':
-        if (c === f || (race && e.pos === 1)) {
-          const p = e.pos;
-          this.say(c, [['e', p === 1 ? pick([`¡Ganamos, ${eng}! ¡Ganamos!`, '¡P1! ¡Victoria! ¡Increíble!']) : p <= 3 ? `¡${P(p)}, podio! ¡Qué carrera!` : p <= 10 ? `${P(p)}. Puntos. Buen trabajo.` : `${P(p)}. Hoy no ha podido ser.`], ['d', p <= 3 ? pick(['¡Sí! ¡Gracias a todos!', '¡Vamos! ¡Qué coche!']) : pick(['Gracias, chicos.', 'Seguimos trabajando.'])]], 4);
-        }
-        break;
-      case 'weather':
-        if (e.what === 'rainStart' && f && this.once(f, 'rain', 90)) this.say(f, [['d', pick(['Empieza a llover.', 'Gotas en la visera. Está lloviendo.'])], ['e', pick(['Recibido. Te decimos cuándo cambiar.', 'Copiado, preparamos intermedios.'])]], 2);
-        else if (e.what === 'rainStop' && f && this.once(f, 'dry', 90)) this.say(f, [['e', 'Ha parado de llover. La trazada se secará pronto.']]);
+        this.say(c, [['e', c.finishPos === 1 ? `¡Ganamos, ${eng}! ¡La estrategia ha funcionado!` : `P${e.pos}. ${e.pos <= 3 ? '¡Podio!' : e.pos <= 10 ? 'Puntos.' : 'Hoy no ha podido ser.'}`]], 4);
         break;
       case 'lap':
-        if (c === f && race && c.tyre.wear > 0.62 && this.once(c, 'tyres', 200)) this.say(c, [['d', pick(['Las gomas se acaban.', 'No me queda goma.'])], ['e', 'Entendido. Estamos con ello.']]);
+        if (race) this.raceLap(c); else if (s.session?.id?.startsWith('Q')) this.qualiLap(c, e);
         break;
     }
+  }
+
+  // en cada vuelta de carrera: una sola radio como mucho, la más importante
+  raceLap(c) {
+    const s = this.sim, left = s.raceLaps - c.lap, { ah, bh } = this.around(c);
+    const gA = ah ? s.gapTo(c, ah) : null, gB = bh && !bh.retired ? s.gapTo(bh, c) : null;
+    const pA = c.rgA, pB = c.rgB; c.rgA = gA; c.rgB = gB;
+    const T = (x) => COMPOUNDS[x]?.name.toLowerCase() || x;
+    const st = c.strategy?.stints[c.stint], fc = this.forecast(), slick = !COMPOUNDS[c.tyre.c].wet;
+    if (c.inPit || c.finished) return;
+    if (left === 5 && this.once(c, 'five', 999)) {
+      const bits = [gB != null ? `${gB.toFixed(1)} sobre ${bh.code}` : null, gA != null ? `${gA.toFixed(1)} a ${ah.code}` : null].filter(Boolean).join(', ');
+      this.say(c, [['e', `Cinco vueltas. ${bits}. ${gA != null && gA < 2 ? 'Todo lo que tengas.' : 'Gestiona y trae el coche.'}`]], 2); return;
+    }
+    if (slick && fc && fc.more && fc.rain > 0.25 && fc.mins <= 6 && this.once(c, 'radar', 200)) {
+      this.say(c, [['e', `Radar: lluvia ${fc.rain > 0.6 ? 'fuerte' : 'moderada'} en ${fc.mins === 1 ? 'un minuto' : `unos ${fc.mins} minutos`}. ${this.inWindow(c) ? 'Retrasamos la parada para ir directos a intermedios.' : 'Seguimos, te avisamos.'}`]], 2); return;
+    }
+    if (st && this.inWindow(c) && this.once(c, 'win' + c.stint, 999)) {
+      this.say(c, [['e', `Se abre la ventana. Box hacia la vuelta ${st.to}, ${T(this.nextTyre(c))}. ${gB != null && gB < 2.5 ? `Vigila a ${bh.code}: puede intentar el undercut.` : ''}`]], 2); return;
+    }
+    if (gB != null && pB != null && gB < 2.5 && pB - gB > 0.25 && this.once(c, 'def', 150)) {
+      const d = pB - gB, n = Math.max(1, Math.ceil((gB - 1) / d));
+      this.say(c, [['e', gB < 1 ? `${bh.code} en DRS, a ${gB.toFixed(1)}. Te recupera ${d.toFixed(1)} por vuelta: protege las frenadas.` : `${bh.code} a ${gB.toFixed(1)}, te recupera ${d.toFixed(1)} por vuelta. En ${n} ${n === 1 ? 'vuelta' : 'vueltas'} le tienes en DRS.`], ['d', pick(['Entendido.', 'Tengo las gomas justas.', 'Vale, cubro.'])]], 1); return;
+    }
+    if (gA != null && pA != null && gA < 4 && gA > 1 && pA - gA > 0.25 && this.once(c, 'att', 150)) {
+      const d = pA - gA, n = Math.max(1, Math.ceil((gA - 1) / d));
+      this.say(c, [['e', `${ah.code} a ${gA.toFixed(1)}. Eres ${d.toFixed(1)} más rápido: en ${n} ${n === 1 ? 'vuelta' : 'vueltas'} estás en DRS.`]], 1); return;
+    }
+    if (c.tyre.wear > 0.58 && left > 3 && !this.inWindow(c) && this.once(c, 'deg', 240)) {
+      const stop = c.stint < (c.strategy?.stints.length || 1) - 1;
+      this.say(c, [['d', pick(['Las gomas se acaban.', 'Pierdo mucho detrás.'])], ['e', stop ? `Copiado. Adelantamos la parada, box en ${Math.max(1, Math.min(3, (st?.to || c.lap) - c.lap))} vueltas.` : `Entendido. Quedan ${left}: gestiona, no hay otra parada.`]], 2);
+    }
+  }
+
+  // clasificación: tras cada vuelta buena, dónde está respecto al corte
+  qualiLap(c, e) {
+    const s = this.sim, id = s.session.id, cut = { Q1: 16, Q2: 10 }[id];
+    if (!e.best || !isFinite(c.best)) return;
+    const cls = s.classification(), p = cls.indexOf(c) + 1, ref = cut ? cls[cut - 1] : cls[0];
+    if (!this.once(c, 'q' + id, 40)) return;
+    if (!cut) { this.say(c, [['e', p === 1 ? 'P1, provisional pole. Otra vuelta si hay goma.' : `P${p}, a ${(c.best - cls[0].best).toFixed(3)} de la pole.`]], 2); return; }
+    const out = cls[cut];
+    if (p <= cut) this.say(c, [['e', `P${p}. ${out && isFinite(out.best) ? `${(out.best - c.best).toFixed(3)} sobre el corte.` : ''} ${p > cut - 3 ? 'Justo: habrá que salir otra vez.' : 'Estamos cómodos.'}`]], 2);
+    else this.say(c, [['e', `P${p}, fuera. Te faltan ${(c.best - ref.best).toFixed(3)} para P${cut}. Otra vuelta, ya.`]], 2);
   }
 
   update(dt, speed) {
