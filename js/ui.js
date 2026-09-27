@@ -3,7 +3,7 @@
 import { COMPOUNDS, TEAMS } from './teams.js';
 import { SESSIONS } from './sim.js';
 import { CAM_TYPES, CAM_LABEL } from './director.js';
-import { degSlope } from './brain.js';
+import { degSlope, buildLine } from './brain.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -417,42 +417,89 @@ export class UI {
   }
 
   showLearning(fromResults = false) {
-    const sim = this.sim, T = this.T;
-    const cars = sim.cars.slice().sort((a, b) => (a.brain.lapHist.length ? Math.min(...a.brain.lapHist.map((l) => l.t)) : 999) - (b.brain.lapHist.length ? Math.min(...b.brain.lapHist.map((l) => l.t)) : 999));
+    const sim = this.sim;
+    // seco o mojado: cada condición tiene su propia memoria (trazada, límite por curva y tiempos)
+    if (this.learnCond == null) this.learnCond = (sim.wx?.line ?? 0) > 0.25 ? 'w' : 'd';
+    const cond = this.learnCond, wetC = cond === 'w';
+    const kbOf = (c) => (wetC ? c.brain.wet : c.brain);
+    const laps = (c) => c.brain.lapHist.filter((l) => !!l.wet === wetC);
+    const bestOf = (c) => { const L = laps(c); return L.length ? Math.min(...L.map((l) => l.t)) : 999; };
+    const cars = sim.cars.slice().sort((a, b) => bestOf(a) - bestOf(b));
     const prior = { S: 0.22, M: 0.12, H: 0.075 };
+    const zero = { exp: 0, acc: 0, mist: 0, locks: 0, catches: 0 };
     const rows = cars.map((c) => {
-      const b = c.brain; const commit = b.commit.reduce((a, x) => a + x, 0) / b.commit.length;
-      const laps = b.lapHist; const first = laps[0]?.t, bestL = laps.length ? Math.min(...laps.map((l) => l.t)) : NaN;
+      const b = c.brain, kb = kbOf(c), st = b.cs?.[cond] || zero;
+      const commit = kb ? kb.commit.reduce((a, x) => a + x, 0) / kb.commit.length : NaN;
+      const L = laps(c); const first = L[0]?.t, bestL = L.length ? Math.min(...L.map((l) => l.t)) : NaN;
       const gain = first && bestL ? first - bestL : 0;
       const ot = b.ot.reduce((a, o) => ({ t: a.t + o.t, w: a.w + o.w }), { t: 0, w: 0 });
       const deg = 'SMH'.split('').map((x) => (b.deg[x].n >= 3 ? degSlope(b, x, prior[x]).toFixed(2) : '·')).join(' / ');
+      const feel = b.feel ? b.feel[cond] : NaN;
+      const pct = (x, lo, span) => Math.max(0, Math.min(100, (x - lo) / span * 100));
       return `<tr data-i="${c.i}" class="${c === this.dir.focus ? 'hl' : ''}"><td><span class="bar" style="background:${c.team.c1}"></span><span class="code">${c.code}</span></td>
-        <td class="num">${b.laps}</td><td class="num">${b.exp}</td><td class="num">${b.acc}</td>
-        <td><span class="meter"><i style="width:${Math.max(0, Math.min(100, (commit - 0.85) / 0.17 * 100))}%"></i></span> ${(commit * 100).toFixed(1)}%</td>
-        <td class="num">${b.mistakes}</td><td class="num">${gain > 0 ? '−' + gain.toFixed(2) + ' s' : '—'}</td><td class="num">${deg}</td><td class="num">${ot.t ? `${ot.w}/${ot.t}` : '—'}</td></tr>`;
+        <td class="num">${L.length}</td><td class="num">${st.exp}</td><td class="num">${st.acc}</td>
+        <td>${isFinite(commit) ? `<span class="meter"><i style="width:${pct(commit, 0.82, 0.2)}%"></i></span> ${(commit * 100).toFixed(1)}%` : '—'}</td>
+        <td>${isFinite(feel) ? `<span class="meter"><i style="width:${pct(feel, 0, 1)}%;background:#4FC3F7"></i></span>` : '—'}</td>
+        <td class="num">${st.catches}</td><td class="num">${st.locks}</td><td class="num">${st.mist}</td>
+        <td class="num">${gain > 0 ? '−' + gain.toFixed(2) + ' s' : '—'}</td>${wetC ? '' : `<td class="num">${deg}</td>`}<td class="num">${ot.t ? `${ot.w}/${ot.t}` : '—'}</td></tr>`;
     }).join('');
-    const m = this.modal(`<header><span class="kicker">IA</span><h2>Qué están aprendiendo los pilotos</h2>${fromResults ? '<button class="btn ghost" id="mBack">Volver</button>' : ''}<button class="btn" id="mClose">Cerrar</button></header>
+    const f = this.dir.focus, fn = esc(f.drv.last);
+    const KIND = { trazada: 'prueba otra trazada y es más rápido', limite: 'se atreve a apretar más', copia: 'copia la trazada de otro y le sale', prudente: 'comete un error y aprieta menos', caza: 'caza un derrape' };
+    const feed = (sim.learnLog || []).filter((e) => e.wet === wetC).slice(-14).reverse().map((e) => {
+      const m = Math.floor(e.t / 60), sec = String(Math.floor(e.t % 60)).padStart(2, '0');
+      return `<li class="${e.car === f ? 'me' : ''} k-${e.kind}"><span class="t">${e.sess || ''} ${m}:${sec}</span><span class="bar" style="background:${e.car.team.c1}"></span><b>${e.car.code}</b> ${KIND[e.kind] || e.kind}${e.corner ? ` en <i>${esc(e.corner)}</i>` : ''}${e.gain > 0.004 ? ` <em>−${e.gain.toFixed(2)} s</em>` : ''}</li>`;
+    }).join('') || `<li class="empty">Aún no ha aprendido nada en ${wetC ? 'mojado' : 'seco'}.</li>`;
+    const noWet = wetC && !sim.cars.some((c) => c.brain.wet);
+    const m = this.modal(`<header><span class="kicker">IA</span><h2>Qué están aprendiendo los pilotos</h2>
+        <div class="seg" id="lCond"><button data-c="d" class="${wetC ? '' : 'on'}">Seco</button><button data-c="w" class="${wetC ? 'on' : ''}">Mojado</button></div>
+        ${fromResults ? '<button class="btn ghost" id="mBack">Volver</button>' : ''}<button class="btn" id="mClose">Cerrar</button></header>
       <div class="body">
-        <p class="lead">En cada curva, cada piloto prueba pequeñas variaciones de su trazada y de cuánto aprieta (el % del agarre que se atreve a usar). Si la curva le sale más rápida sin salirse, se queda con el cambio; si comete un error, se vuelve más prudente ahí. En las tandas largas mide cuánto se degradan los neumáticos y con eso decide la estrategia de carrera. En carrera también aprende en qué curvas le salen los adelantamientos. Todo se guarda de un fin de semana al siguiente.</p>
+        <p class="lead">En cada curva, cada piloto prueba pequeñas variaciones de su trazada y de cuánto agarre se atreve a usar, y se queda con lo que le hace más rápido sin errores; si se equivoca, ahí aprieta menos. <b>El seco y el mojado se aprenden por separado</b>: cada mejora pasa solo un poco (~15 %) a la otra memoria, y cazar derrapes en seco le da algo de tacto para cuando llueva. Lo aprendido se borra al empezar otro fin de semana.</p>
+        ${noWet ? '<p class="lead"><b>Este fin de semana aún no ha llovido:</b> la memoria de mojado nacerá de la de seco, más prudente, la primera vez que la pista se moje.</p>' : ''}
         <div class="grid2">
-          <div class="chartBox"><h3>Mejor vuelta según aprenden</h3><canvas class="chart" id="lchart" width="1000" height="520"></canvas></div>
-          <div class="chartBox"><h3>Trazada de ${esc(this.dir.focus.drv.last)} frente a la ideal</h3><canvas class="chart" id="lline" width="1000" height="520"></canvas></div>
+          <div class="chartBox"><h3>Mejor vuelta según aprenden · ${wetC ? 'mojado' : 'seco'}</h3><canvas class="chart" id="lchart" width="1000" height="520"></canvas></div>
+          <div class="chartBox"><h3>Trazada de ${fn} en ${wetC ? 'mojado' : 'seco'} frente a la ideal</h3><canvas class="chart" id="lline" width="1000" height="520"></canvas></div>
         </div>
-        <h3 style="margin-top:16px">Pilotos</h3>
-        <div class="tw"><table class="cls"><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Pruebas</th><th class="num">Mejoras</th><th>Límite usado</th><th class="num">Errores</th><th class="num">Ganado</th><th class="num">Degradación S / M / H (s/vta)</th><th class="num">Adelant. éxito/int.</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="grid2" style="margin-top:14px">
+          <div class="chartBox"><h3>Cuánto aprieta ${fn} en cada curva · seco y mojado</h3><canvas class="chart" id="lcommit" width="1000" height="420"></canvas></div>
+          <div class="chartBox"><h3>Últimos aprendizajes · ${wetC ? 'mojado' : 'seco'}</h3><ul class="lfeed">${feed}</ul></div>
+        </div>
+        <h3 style="margin-top:16px">Pilotos · ${wetC ? 'mojado' : 'seco'}</h3>
+        <div class="tw"><table class="cls"><thead><tr><th>Piloto</th><th class="num">Vueltas</th><th class="num">Pruebas</th><th class="num">Mejoras</th><th>Límite usado</th><th title="Tacto con el coche deslizando: sube cazando derrapes">Tacto</th><th class="num">Derrapes cazados</th><th class="num">Bloqueos</th><th class="num">Errores</th><th class="num">Ganado</th>${wetC ? '' : '<th class="num">Degradación S / M / H (s/vta)</th>'}<th class="num">Adelant. éxito/int.</th></tr></thead><tbody>${rows}</tbody></table></div>
       </div>`);
     m.querySelector('#mClose').onclick = () => this.closeModal();
+    m.querySelector('#lCond').onclick = (e) => { const c = e.target.closest('button')?.dataset.c; if (c && c !== this.learnCond) { this.learnCond = c; this.showLearning(fromResults); } };
     const back = m.querySelector('#mBack'); if (back) back.onclick = () => { const e = sim.events.slice().reverse().find((x) => x.type === 'sessionEnd'); if (e) this.results(e.id, e.cls); };
     m.querySelector('tbody').onclick = (e) => { const tr = e.target.closest('tr'); if (tr) { this.dir.setFocus(sim.cars[+tr.dataset.i]); this.showLearning(fromResults); } };
-    this.drawLapChart(m.querySelector('#lchart'));
-    this.drawLineChart(m.querySelector('#lline'));
+    this.drawLapChart(m.querySelector('#lchart'), wetC);
+    this.drawLineChart(m.querySelector('#lline'), wetC);
+    this.drawCommitChart(m.querySelector('#lcommit'));
   }
 
-  drawLapChart(cv) {
+  // límite de agarre que se atreve a usar en cada curva: seco (color del equipo) y mojado (azul)
+  drawCommitChart(cv) {
+    const g = cv.getContext('2d'), W = cv.width, H = cv.height, car = this.dir.focus, b = car.brain, T = this.T;
+    const n = b.commit.length, L = 60, R = 16, Tp = 18, B = 56, bw = (W - L - R) / n;
+    const lo = 0.8, hi = 1.02, Y = (v) => Tp + (1 - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * (H - Tp - B);
+    g.font = '600 20px "Titillium Web"'; g.fillStyle = '#a3a6b4'; g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 1;
+    for (let k = 0; k <= 4; k++) { const v = lo + ((hi - lo) * k) / 4, y = Y(v); g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke(); g.fillText(Math.round(v * 100) + '%', 4, y + 6); }
+    const dryC = car.team.c1 === '#141414' ? '#20E83B' : car.team.c1;
+    for (let z = 0; z < n; z++) {
+      const x = L + z * bw, w2 = Math.max(3, bw * 0.36);
+      g.fillStyle = dryC; g.fillRect(x + bw * 0.12, Y(b.commit[z]), w2, H - B - Y(b.commit[z]));
+      if (b.wet) { g.fillStyle = '#4FC3F7'; g.fillRect(x + bw * 0.12 + w2 + 2, Y(b.wet.commit[z]), w2, H - B - Y(b.wet.commit[z])); }
+      const nm = (T.corners[z]?.name || '').replace(/^Curva\s*/i, 'T');
+      g.fillStyle = '#a3a6b4'; g.font = '600 16px "Titillium Web"'; g.save(); g.translate(x + bw * 0.5, H - B + 14); g.rotate(-0.6); g.fillText(nm.slice(0, 10), -40, 10); g.restore();
+    }
+    g.font = '600 18px "Titillium Web"'; g.fillStyle = dryC; g.fillRect(W - 260, 8, 14, 14); g.fillStyle = '#d9d9df'; g.fillText('seco', W - 240, 21);
+    g.fillStyle = '#4FC3F7'; g.fillRect(W - 170, 8, 14, 14); g.fillStyle = '#d9d9df'; g.fillText(b.wet ? 'mojado' : 'mojado (aún no)', W - 150, 21);
+  }
+
+  drawLapChart(cv, wet = false) {
     const g = cv.getContext('2d'), W = cv.width, H = cv.height, sim = this.sim;
     // mejor vuelta acumulada: baja cuando el piloto aprende algo que le hace más rápido
-    const series = sim.cars.map((c) => { let m = Infinity; return { c, pts: c.brain.lapHist.map((l) => (m = Math.min(m, l.t))) }; }).filter((s) => s.pts.length > 1);
-    if (!series.length) { g.fillStyle = '#a3a6b4'; g.font = '600 28px "Titillium Web"'; g.fillText('Aún no hay vueltas limpias.', 30, 60); return; }
+    const series = sim.cars.map((c) => { let m = Infinity; return { c, pts: c.brain.lapHist.filter((l) => !!l.wet === wet).map((l) => (m = Math.min(m, l.t))) }; }).filter((s) => s.pts.length > 1);
+    if (!series.length) { g.fillStyle = '#a3a6b4'; g.font = '600 28px "Titillium Web"'; g.fillText(wet ? 'Aún no hay vueltas limpias en mojado.' : 'Aún no hay vueltas limpias.', 30, 60); return; }
     const all = series.flatMap((s) => s.pts); const lo = Math.min(...all), hi = Math.min(Math.max(...all), lo + 6);
     const maxN = Math.max(...series.map((s) => s.pts.length));
     const L = 70, R = 20, Tp = 20, B = 50;
@@ -469,13 +516,16 @@ export class UI {
     g.globalAlpha = 1;
   }
 
-  drawLineChart(cv) {
+  drawLineChart(cv, wet = false) {
     const g = cv.getContext('2d'), W = cv.width, H = cv.height, T = this.T, car = this.dir.focus;
+    const kb = wet ? car.brain.wet : car.brain;
+    if (!kb) { g.fillStyle = '#a3a6b4'; g.font = '600 28px "Titillium Web"'; g.fillText('Aún no tiene trazada de mojado.', 30, 60); return; }
+    const line = buildLine(T, kb, new Float32Array(T.N));
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
     for (let i = 0; i < T.N; i += 5) { x0 = Math.min(x0, T.x[i]); x1 = Math.max(x1, T.x[i]); z0 = Math.min(z0, T.z[i]); z1 = Math.max(z1, T.z[i]); }
     // zoom en la curva más lenta con más diferencia entre trazadas
     let bz = T.zones[0], bd = -1;
-    for (const z of T.zones) { let d = 0; for (let q = 0; q < z.len; q += 5) { const i = T.idx(z.a + q); d += Math.abs(car.line[i] - T.ideal[i]); } if (d / z.len > bd) { bd = d / z.len; bz = z; } }
+    for (const z of T.zones) { let d = 0; for (let q = 0; q < z.len; q += 5) { const i = T.idx(z.a + q); d += Math.abs(line[i] - T.ideal[i]); } if (d / z.len > bd) { bd = d / z.len; bz = z; } }
     const P = [0, 0, 0]; let cx0 = 1e9, cx1 = -1e9, cz0 = 1e9, cz1 = -1e9;
     for (let q = 0; q < bz.len; q += 2) { T.pos(bz.a + q, 0, P); cx0 = Math.min(cx0, P[0]); cx1 = Math.max(cx1, P[0]); cz0 = Math.min(cz0, P[2]); cz1 = Math.max(cz1, P[2]); }
     const pad = 30; const sc = Math.min((W - 2 * pad) / (cx1 - cx0 + 30), (H - 2 * pad - 30) / (cz1 - cz0 + 30));
@@ -489,9 +539,9 @@ export class UI {
     strokeLine(() => 0, '#3a3c44', T.halfW * 2 * sc);
     strokeLine(() => T.halfW, '#d9d9df', 2); strokeLine(() => -T.halfW, '#d9d9df', 2);
     strokeLine((i) => T.ideal[i], '#a3a6b4', 3, [8, 8]);
-    strokeLine((i) => car.line[i], car.team.c1 === '#141414' ? '#20E83B' : car.team.c1, 5);
+    strokeLine((i) => line[i], car.team.c1 === '#141414' ? '#20E83B' : car.team.c1, 5);
     g.fillStyle = '#fff'; g.font = '900 26px "Titillium Web"'; g.fillText(bz.corner.name, 16, 34);
-    g.font = '600 20px "Titillium Web"'; g.fillStyle = '#a3a6b4'; g.fillText('discontinua: trazada de mínima curvatura · color: la suya', 16, H - 14);
+    g.font = '600 20px "Titillium Web"'; g.fillStyle = '#a3a6b4'; g.fillText('discontinua: trazada ideal (la goma) · color: la suya', 16, H - 14);
   }
 }
 

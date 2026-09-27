@@ -922,7 +922,7 @@ export class Sim {
     if (car.lock > 0.05) {
       ay *= 1 - 0.55 * car.lock; ax *= 1 - 0.12 * car.lock;
       car.tyre.flat = Math.min(1, (car.tyre.flat || 0) + car.lock * DT * 0.05 * (0.6 + v / 80));
-      if (!car.lockOn && car.lock > 0.3) { car.lockOn = true; this.emit({ type: 'lockup', car, corner: this.cornerAt(car.s), sev: car.lock }); }
+      if (!car.lockOn && car.lock > 0.3) { car.lockOn = true; this.lstat(car).locks++; this.emit({ type: 'lockup', car, corner: this.cornerAt(car.s), sev: car.lock }); }
     } else if (car.lock < 0.02) { car.lock = 0; car.lockOn = false; }
     // el exceso hace deslizar la trasera (frenando o acelerando fuerte) o el morro (a medio gas: se abre)
     const overs = axT < 0 ? 0.25 + 0.55 * lon : 0.25 + 0.65 * lon;
@@ -938,7 +938,9 @@ export class Sim {
       const g = DT * 0.0025 * (0.5 + car.drv.learn), a = wm > 0.5 ? 'w' : 'd', o = a === 'w' ? 'd' : 'w';
       F[a] = Math.min(1, F[a] + g * (1 - F[a])); F[o] = Math.min(1, F[o] + g * 0.25 * (1 - F[o]));
     }
-    if (Math.abs(car.beta) > 0.45 && !car.inPit) { this.startSpin(car, ay / Math.max(1, v * v), Math.abs(bdot)); return this.spinTiming(car); }
+    if (Math.abs(car.beta) > 0.1) car.slideOn = true;
+    else if (car.slideOn && Math.abs(car.beta) < 0.04) { car.slideOn = false; this.lstat(car).catches++; this.learnNote(car, 'caza', car.zoneIn, 0); }
+    if (Math.abs(car.beta) > 0.45 && !car.inPit) { car.slideOn = false; this.startSpin(car, ay / Math.max(1, v * v), Math.abs(bdot)); return this.spinTiming(car); }
 
     // --- avance
     let acc = ax - res - surfDrag - Math.abs(car.beta) * 14;
@@ -1066,7 +1068,7 @@ export class Sim {
     const zi = this.T.zoneOf[this.T.idx(car.s)];
     if (zi >= 0) { const d = (type === 'wide' ? 0.35 : 1) * (0.003 + 0.004 * car.drv.learn); car.kb.commit[zi] -= d; this.otherKB(car).commit[zi] -= d * 0.2; }
     if (type !== 'wide') { car.lapClean = false; car.zoneMist = true; }
-    car.brain.mistakes++;
+    car.brain.mistakes++; this.lstat(car).mist++;
     if (!car.mistake) car.mistake = { type, t: 0, dur: type === 'off' ? 2.5 : 1.2, slow: type === 'off' ? 0.85 : 1 };
     this.emit({ type: 'mistake', car, kind: type, crash: false, corner: this.cornerAt(car.s) });
   }
@@ -1080,7 +1082,7 @@ export class Sim {
       psi: car.psi, k0: k0 || 0, v0: car.v, rot: car.beta, w: Math.min(3, Math.abs(w0 || 0)),
       wMax: (hi ? 2.1 : 2.6) * (0.8 + this.rng() * 0.4), phase: 'slide', stopT: 0,
     };
-    car.lapClean = false; car.zoneMist = true; car.brain.mistakes++;
+    car.lapClean = false; car.zoneMist = true; car.brain.mistakes++; this.lstat(car).mist++;
     const zi = this.T.zoneOf[this.T.idx(car.s)];
     if (zi >= 0) { const d = 0.003 + 0.004 * car.drv.learn; car.kb.commit[zi] -= d; this.otherKB(car).commit[zi] -= d * 0.2; }
     this.emit({ type: 'mistake', car, kind: 'spin', crash: false, corner: this.cornerAt(car.s) });
@@ -1420,7 +1422,7 @@ export class Sim {
       }
       if (clean && !race) {
         car.brain.laps++;
-        car.brain.lapHist.push({ w: this.weekend, s: ss.id, t: lapT });
+        car.brain.lapHist.push({ w: this.weekend, s: ss.id, t: lapT, wet: car.kb !== car.brain, c: car.tyre.c });
         if (car.brain.lapHist.length > 200) car.brain.lapHist.shift();
       }
       // degradación: tiempo corregido por gasolina frente a edad del neumático
@@ -1809,6 +1811,18 @@ export class Sim {
     return COMPOUNDS[car.tyre.c].wet && W.line > 0.25 && Math.abs(W.target - W.rain) < 0.2 && Math.abs(this.wetAt(car) - (car.wetEst || 0)) < 0.12;
   }
 
+  // estadísticas de aprendizaje por condición (seco d / mojado w) y registro de lo último que han aprendido
+  lstat(car) {
+    const B = car.brain, k = car.kb === car.brain ? 'd' : 'w';
+    B.cs ||= { d: { exp: 0, acc: 0, mist: 0, locks: 0, catches: 0, xfer: 0 }, w: { exp: 0, acc: 0, mist: 0, locks: 0, catches: 0, xfer: 0 } };
+    return B.cs[k];
+  }
+  learnNote(car, kind, z, gain) {
+    const L = this.learnLog ||= [];
+    L.push({ t: this.t, sess: this.session?.id, car, kind, corner: z != null && z >= 0 ? this.T.corners[z]?.name : '', gain, wet: car.kb !== car.brain });
+    if (L.length > 300) L.shift();
+  }
+
   zoneExit(car, z) {
     const b = car.kb, B = car.brain;
     const t = this.t - car.zoneT0;
@@ -1825,13 +1839,13 @@ export class Sim {
     const clean = car.zoneClean && !car.zoneMist;
     if (car.alt && car.alt.z === z) this.clearAlt(car);
     if (cand) {
-      B.exp++;
+      B.exp++; this.lstat(car).exp++;
       let accept = false;
       if (clean && b.zoneN[z] > 0 && norm < b.zoneBase[z] - 0.008) accept = true;
       // trazada que su modelo da por mejor: basta con que la pista no la desmienta
       if (cand.pred && clean && b.zoneN[z] > 0 && norm < b.zoneBase[z] + 0.015 && car.zoneSlide < 0.04) accept = true;
       if (clean && b.zoneN[z] === 0) accept = true;
-      if (car.zoneMist) b.commit[z] = Math.min(b.commit[z], cand.commit) - 0.012 * (0.6 + car.drv.learn * 0.6);
+      if (car.zoneMist) { b.commit[z] = Math.min(b.commit[z], cand.commit) - 0.012 * (0.6 + car.drv.learn * 0.6); this.learnNote(car, 'prudente', z, 0); }
       else if (car.zoneSlide > 0.04 && cand.commit > b.commit[z]) accept = false;
       if (accept) {
         // un poco de lo aprendido vale también para la otra condición
@@ -1839,6 +1853,8 @@ export class Sim {
         o.commit[z] += (cand.commit - b.commit[z]) * 0.15;
         if (cand.vals) for (let j = cand.lo; j <= cand.hi; j++) o.nodes[j % n] += (cand.vals[j - cand.lo] - b.nodes[j % n]) * 0.12;
         B.acc++; b.commit[z] = cand.commit; cand.accepted = true;
+        const st = this.lstat(car); st.acc++; st.xfer++;
+        this.learnNote(car, cand.vals ? (cand.imit ? 'copia' : 'trazada') : 'limite', z, b.zoneN[z] > 0 ? Math.max(0, b.zoneBase[z] - norm) : 0);
         if (cand.vals) for (let j = cand.lo; j <= cand.hi; j++) b.nodes[j % n] = cand.vals[j - cand.lo];
         if (cand.imit) B.imit = (B.imit || 0) + 1;
         b.zoneBase[z] = b.zoneN[z] > 0 ? b.zoneBase[z] * 0.5 + norm * 0.5 : norm; b.zoneN[z]++;

@@ -224,6 +224,19 @@ table.cls .bar { display: inline-block; width: 4px; height: 14px; border-radius:
 canvas.chart { width: 100%; height: 260px; display: block; }
 .meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.1); vertical-align: middle; overflow: hidden; }
 .meter i { display: block; height: 100%; background: var(--green); }
+.sheet header .seg { margin-left: auto; display: inline-flex; background: rgba(255,255,255,0.06); border-radius: 999px; padding: 3px; }
+.sheet header .seg button { margin: 0; border: 0; background: transparent; color: var(--muted); font: 700 13px 'Titillium Web', sans-serif; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
+.sheet header .seg button.on { background: #fff; color: #111; }
+.sheet header .seg + .btn, .sheet header .seg + .btn.ghost { margin-left: 0; }
+.lfeed { list-style: none; margin: 0; padding: 0; max-height: 372px; overflow: auto; font-size: 13px; }
+.lfeed li { display: flex; align-items: baseline; gap: 7px; padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,0.05); color: #d9d9df; }
+.lfeed li .t { color: var(--muted); font-size: 11px; min-width: 64px; font-variant-numeric: tabular-nums; }
+.lfeed li .bar { width: 3px; height: 12px; border-radius: 2px; align-self: center; }
+.lfeed li em { color: var(--green); font-style: normal; font-weight: 700; margin-left: auto; }
+.lfeed li i { font-style: normal; color: #fff; }
+.lfeed li.me { background: rgba(255,255,255,0.06); border-radius: 6px; }
+.lfeed li.k-prudente { color: #ffb4a8; }
+.lfeed li.empty { color: var(--muted); }
 .pos-up { color: var(--green); font-weight: 700; } .pos-down { color: var(--red); font-weight: 700; }
 #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #07070a; z-index: 10; }
 #loading .box { text-align: center; }
