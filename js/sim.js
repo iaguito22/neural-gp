@@ -625,6 +625,8 @@ export class Sim {
       for (const { o, rel } of near) {
         if (rel < -45 || rel > -4) continue;
         if (o.mode === 'attack' && o.target === car && o.v >= car.v - 2) {
+          // con mucha menos goma (lisos contra intermedios en mojado) no hay defensa posible: no cierra la puerta
+          if (o.gripAdv > 1.12) continue;
           if (car.mode !== 'attack') car.mode = 'defend';
           car.attacker = o; break;
         }
@@ -717,7 +719,7 @@ export class Sim {
       if (Math.abs(rel) > LEN + 0.5) continue;
       if (T.zoneOf[i] < 0 && toCorner > brakeDist + 40) continue;
       const outside = Math.sign(car.d - o.d) === -inside;
-      if (outside && rel > 1.0) car.squeeze = 0.035 * (1.2 - car.drv.agg * 0.4);
+      if (outside && rel > 1.0 && !(car.mode === 'attack' && car.target === o && car.gripAdv > 1.06)) car.squeeze = 0.035 * (1.2 - car.drv.agg * 0.4);
       if (!outside && rel > 2.5) car.squeeze = 0.02;
       if (!outside && rel <= 2.5 && car.mode === 'attack') car.dive = 0.006 + 0.012 * car.drv.agg;
     }
