@@ -74,7 +74,7 @@ async function main(choice) {
     for (const o of hidden) o.visible = false;
   }
   const app = {
-    sim, T, director, speed: 1, lastSpeed: 1, skipping: false, audio: choice.audio,
+    sim, T, director, speed: 1, lastSpeed: 1, skipping: false, audio: new EngineAudio(),
     setSpeed(s) { if (s > 0) this.lastSpeed = s; this.speed = s; ui.syncButtons(); },
     skip() { if (!sim.session?.done) { this.skipping = true; document.getElementById('skipBar')?.remove(); const d = document.createElement('div'); d.id = 'skipBar'; d.innerHTML = '<b>Simulando el resto de la sesión…</b><div class="track"><i></i></div>'; document.getElementById('hud').appendChild(d); } },
     restart() { location.reload(); },   // fin de semana nuevo: pilotos sin nada aprendido
@@ -202,7 +202,7 @@ async function main(choice) {
   // --- empieza
   document.getElementById('loading').remove();
   if (choice.mode === 'mgr') { app.manager = new Manager(sim, director, choice.team); director.setFocus(app.manager.cars[0]); }
-  ui.syncButtons();
+  app.audio.start(); ui.syncButtons();
   if (!params.get('autostart')) startSession(params.get('start') || 'FP');
   if (params.get('autostart')) { ui.closeModal(); startSession(params.get('autostart')); }
   requestAnimationFrame(loop);
@@ -282,8 +282,6 @@ async function startScreen() {
       const v = (id) => intro.querySelector('#' + id).value;
       const choice = { quality: v('iQ'), track: v('iTrack'), raceLaps: +v('iLaps'), weather: v('iWx'), mode: v('iMode'), team: v('iTeam') };
       writeJSON(SETTINGS, { ...settings, ...choice });
-      // el sonido se arranca aquí, con el clic (el navegador no deja hacerlo después de la carga)
-      choice.audio = new EngineAudio(); choice.audio.start();
       intro.remove(); loading.style.display = ''; document.body.classList.remove('menu');
       resolve(choice);
     };

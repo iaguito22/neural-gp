@@ -379,8 +379,9 @@ export class Director {
     if (this.shotT > this.shotLen && performance.now() - (this.lastCut || 0) > 3500 || this.shotT > 1e8) {
       const r = Math.random(), chaser = this.focus !== F.a ? r < 0.6 : r < 0.4;   // alternar entre los dos
       const car = chaser ? F.a : F.b, q = Math.random();
-      const type = chaser ? (q < 0.4 ? 'track' : q < 0.58 ? 'tcam' : q < 0.74 ? 'cockpit' : q < 0.88 ? 'chase' : 'heli')
-        : (q < 0.4 ? 'track' : q < 0.65 ? (F.gap < 0.8 ? 'rear' : 'track') : q < 0.8 ? 'heli' : 'tcam');
+      // preferencia: T-cam, pista y, en el de delante, la trasera (que enseña al que le persigue)
+      const type = chaser ? (q < 0.45 ? 'tcam' : q < 0.85 ? 'track' : q < 0.93 ? 'cockpit' : 'chase')
+        : (q < 0.45 ? (F.gap < 1.5 ? 'rear' : 'track') : q < 0.8 ? 'track' : 'tcam');
       this.focus = car; this.first = true; this.trackCam = null; this.type = type === this.type && type !== 'track' ? 'track' : type;
       this.shotT = 0; this.shotLen = 6 + Math.random() * 5; this.holdFocus = 8; this.reason = 'battle'; this.lastCut = performance.now();
       this.changed();
@@ -397,18 +398,18 @@ export class Director {
   // plano para una historia: una vuelta lanzada alterna fuera (pista) y dentro (cockpit, T-cam, morro)
   sessionShot(st) {
     const r = Math.random(), n = this.shotN || 0;
-    if (!st) return r < 0.4 ? 'track' : r < 0.6 ? 'tcam' : r < 0.8 ? 'chase' : 'heli';
+    if (!st) return r < 0.45 ? 'track' : r < 0.8 ? 'tcam' : r < 0.9 ? 'chase' : 'heli';
     switch (st.kind) {
       case 'mistake': return r < 0.7 ? 'track' : 'heli';
       case 'pitexit': return r < 0.45 ? 'track' : r < 0.7 ? 'tcam' : 'heli';
-      case 'traffic': return r < 0.45 ? 'track' : r < 0.7 ? 'heli' : r < 0.9 ? 'tcam' : 'chase';
+      case 'traffic': return r < 0.45 ? 'track' : r < 0.8 ? 'tcam' : r < 0.9 ? (this.focus && this.chasedBy(this.focus) ? 'rear' : 'heli') : 'chase';
       case 'finish': case 'hotlap': {
         if (st.toLine < 330) return 'track';
         if (n % 2 === 0) return r < 0.8 ? 'track' : 'heli';
         // dentro del coche: la T-cam es la preferida
-        return r < 0.55 ? 'tcam' : r < 0.78 ? 'cockpit' : r < 0.9 ? 'nose' : 'chase';
+        return r < 0.7 ? 'tcam' : r < 0.85 ? 'cockpit' : r < 0.93 ? 'nose' : 'chase';
       }
-      default: return r < 0.38 ? 'track' : r < 0.63 ? 'tcam' : r < 0.78 ? 'chase' : r < 0.9 ? 'heli' : 'rear';
+      default: return r < 0.45 ? 'track' : r < 0.8 ? 'tcam' : r < 0.88 ? 'chase' : r < 0.94 ? 'heli' : (this.focus && this.chasedBy(this.focus) ? 'rear' : 'track');
     }
   }
 
@@ -429,6 +430,14 @@ export class Director {
     this.changed();
   }
 
+  // ¿hay alguien pegado detrás? (entonces la trasera de este coche enseña algo)
+  chasedBy(car) {
+    const T = this.T;
+    for (const o of this.sim.cars) if (o !== car && o.state === 'track' && !o.inPit && !o.retired) { const g = T.rel(o.s, car.s); if (g > 3 && g < 45) return true; }
+    return false;
+  }
+
+  // preferencia de planos: T-cam y pista sobre todo; la trasera, solo en el coche de delante (con uno pegado detrás)
   pickType(why) {
     const r = Math.random();
     const has = (w) => why.includes(w);
@@ -436,13 +445,14 @@ export class Director {
     let t;
     if (this.sim.session?.id === 'RACE' && ['grid', 'lights'].includes(this.sim.session.phase)) return 'heli';
     if (this.sim.session?.id === 'RACE' && this.sim.t - (this.sim.raceStart ?? 0) < 12) return 'heli';
+    const rear = this.chasedBy(this.focus);
     if (has('pit')) t = 'track';
     else if (has('mistake') || has('crash') || has('event')) t = r < 0.65 ? 'track' : 'heli';
-    else if (has('side') || has('battle')) t = r < 0.5 ? 'track' : r < 0.7 ? 'cockpit' : r < 0.82 ? 'tcam' : r < 0.92 ? 'chase' : 'rear';
-    else if (has('purple') || has('lap')) t = r < 0.35 ? 'cockpit' : r < 0.7 ? 'track' : r < 0.85 ? 'tcam' : 'chase';
-    else t = r < 0.45 ? 'track' : r < 0.6 ? 'chase' : r < 0.72 ? 'tcam' : r < 0.82 ? 'cockpit' : r < 0.9 ? 'nose' : 'heli';
-    if (t === avoid && t !== 'track') t = 'track';
-    if (t === 'rear' && has('battle')) t = 'chase';     // en el de detrás de una pelea la trasera no enseña nada
+    else if (has('side') || has('battle')) t = rear && r < 0.35 ? 'rear' : r < 0.65 ? 'tcam' : r < 0.92 ? 'track' : 'cockpit';
+    else if (has('purple') || has('lap')) t = r < 0.45 ? 'tcam' : r < 0.82 ? 'track' : r < 0.92 ? 'cockpit' : 'chase';
+    else t = rear && r < 0.25 ? 'rear' : r < 0.55 ? 'track' : r < 0.85 ? 'tcam' : r < 0.92 ? 'chase' : r < 0.96 ? 'cockpit' : 'heli';
+    if (t === avoid && t !== 'track') t = avoid === 'tcam' ? 'track' : 'tcam';
+    if (t === 'rear' && !rear) t = 'tcam';
     return t;
   }
 
@@ -675,7 +685,18 @@ export class Director {
     const rc = this.rc || (this.rc = new THREE.Raycaster());
     const o = new THREE.Vector3(from.x, from.y + 0.8, from.z), dir = new THREE.Vector3().subVectors(to, o); const L = dir.length();
     rc.set(o, dir.normalize()); rc.near = 3; rc.far = L; rc.camera = this.cam;
-    const hits = rc.intersectObjects(sc.children, true);
+    // solo objetos baratos de probar: sin el terreno (330k triángulos: 35 ms por rayo) ni los instanciados con miles
+    // de copias (árboles, público); con todo la escena el rayo costaba ~47 ms y daba tirones cada 0,2 s en el dron
+    if (!this.occl || this.occlN !== sc.children.length) {
+      this.occlN = sc.children.length; this.occl = [];
+      sc.traverse((o) => {
+        if (!o.isMesh || this.carObjs.has(o)) return;
+        const g = o.geometry, tris = g.index ? g.index.count / 3 : (g.attributes.position?.count || 0) / 3;
+        if (tris > 20000 || (o.isInstancedMesh && o.count > 400)) return;
+        this.occl.push(o);
+      });
+    }
+    const hits = rc.intersectObjects(this.occl, false);
     return hits.some((h) => !this.carObjs.has(h.object) && h.object.visible && !h.object.isSprite && !h.object.isPoints && !h.object.isLine &&
       !(h.object.material && h.object.material.transparent && h.object.material.opacity < 0.5));
   }
